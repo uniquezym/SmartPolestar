@@ -1,0 +1,56 @@
+{
+  "color": [
+    {
+      "name": "start_window_background",
+      "value": "#F7F7F5"
+    },
+    {
+      "name": "app_primary_text",
+      "value": "#181918"
+    },
+    {
+      "name": "app_secondary_text",
+      "value": "#6E706C"
+    },
+    {
+      "name": "app_background",
+      "value": "#F7F7F5"
+    },
+    {
+      "name": "app_accent",
+      "value": "#FF7A00"
+    },
+    {
+      "name": "app_accent_soft",
+      "value": "#EBECE8"
+    },
+    {
+      "name": "app_card_background",
+      "value": "#F5F5F3"
+    },
+    {
+      "name": "app_card_border",
+      "value": "#DCDDD8"
+    },
+    {
+      "name": "app_divider",
+      "value": "#E5E6E2"
+    },
+    {
+      "name": "app_on_accent",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "app_health_ok",
+      "value": "#2E7D32"
+    },
+    {
+      "name": "app_health_warn",
+      "value": "#FF7A00"
+    },
+    {
+      "name": "app_health_error",
+      "value": "#C62828"
+    }
+  ]
+}

@@ -1,0 +1,128 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "极星2 车主助手"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "极星2 车主助手主界面"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "极星2"
+    },
+    {
+      "name": "login_title",
+      "value": "登录极星账号"
+    },
+    {
+      "name": "login_phone_hint",
+      "value": "中国区手机号"
+    },
+    {
+      "name": "login_password_hint",
+      "value": "密码"
+    },
+    {
+      "name": "login_submit",
+      "value": "登录"
+    },
+    {
+      "name": "login_failed",
+      "value": "账号登录失败"
+    },
+    {
+      "name": "auth_expired",
+      "value": "登录状态已失效，请重新登录"
+    },
+    {
+      "name": "disclaimer_title",
+      "value": "使用须知"
+    },
+    {
+      "name": "disclaimer_accept",
+      "value": "我已阅读并同意"
+    },
+    {
+      "name": "state_battery",
+      "value": "电量"
+    },
+    {
+      "name": "state_range",
+      "value": "预计续航"
+    },
+    {
+      "name": "state_charging",
+      "value": "充电状态"
+    },
+    {
+      "name": "state_lock",
+      "value": "车锁"
+    },
+    {
+      "name": "state_climate",
+      "value": "驻车空调"
+    },
+    {
+      "name": "state_odometer",
+      "value": "总里程"
+    },
+    {
+      "name": "control_unlock",
+      "value": "解锁车辆"
+    },
+    {
+      "name": "control_lock",
+      "value": "锁定车辆"
+    },
+    {
+      "name": "control_climate_start",
+      "value": "开启空调"
+    },
+    {
+      "name": "control_climate_stop",
+      "value": "关闭空调"
+    },
+    {
+      "name": "control_trunk_open",
+      "value": "打开尾门"
+    },
+    {
+      "name": "control_trunk_close",
+      "value": "关闭尾门"
+    },
+    {
+      "name": "control_honk_flash",
+      "value": "寻车"
+    },
+    {
+      "name": "confirm_vehicle_operation",
+      "value": "确认车辆操作"
+    },
+    {
+      "name": "confirm_cancel",
+      "value": "取消"
+    },
+    {
+      "name": "common_confirm",
+      "value": "确认并执行"
+    },
+    {
+      "name": "common_loading",
+      "value": "加载中…"
+    },
+    {
+      "name": "common_retry",
+      "value": "重试"
+    },
+    {
+      "name": "common_back",
+      "value": "返回"
+    },
+    {
+      "name": "permission_bluetooth_reason",
+      "value": "需要扫描车辆蓝牙信号以实现靠近与离开的自动车控"
+    }
+  ]
+}

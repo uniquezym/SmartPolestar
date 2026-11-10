@@ -1,0 +1,57 @@
+{
+  "app": {
+    "signingConfigs": [
+      {
+        "name": "default",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "<C:/Users/<user>/.ohos/config/default_<bundle>.cer>",
+          "keyAlias": "debugKey",
+          "keyPassword": "<由 DevEco Studio 生成，不要提交到版本库>",
+          "profile": "<C:/Users/<user>/.ohos/config/default_<bundle>.p7b>",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "<C:/Users/<user>/.ohos/config/default_<bundle>.p12>",
+          "storePassword": "<由 DevEco Studio 生成，不要提交到版本库>"
+        }
+      }
+    ],
+    "products": [
+      {
+        "name": "default",
+        "signingConfig": "default",
+        "targetSdkVersion": "6.1.0(23)",
+        "compatibleSdkVersion": "6.1.0(23)",
+        "runtimeOS": "HarmonyOS",
+        "buildOption": {
+          "nativeCompiler": "BiSheng",
+          "strictMode": {
+            "caseSensitiveCheck": true,
+            "useNormalizedOHMUrl": true
+          }
+        }
+      }
+    ],
+    "buildModeSet": [
+      {
+        "name": "debug",
+      },
+      {
+        "name": "release"
+      }
+    ]
+  },
+  "modules": [
+    {
+      "name": "entry",
+      "srcPath": "./entry",
+      "targets": [
+        {
+          "name": "default",
+          "applyToProducts": [
+            "default"
+          ]
+        }
+      ]
+    }
+  ]
+}

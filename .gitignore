@@ -1,0 +1,16 @@
+/node_modules
+/oh_modules
+/local.properties
+/.idea
+**/build
+/.hvigor
+.cxx
+/.clangd
+/.clang-format
+/.clang-tidy
+**/.test
+/.appanalyzer
+
+# 含签名密钥与密码，由 DevEco Studio 按本机生成，不入库。
+# 仓库中提供 build-profile.json5.template 作为结构参考。
+/build-profile.json5
