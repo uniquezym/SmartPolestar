@@ -1,8 +1,7 @@
-# 极星2 车主助手（SmartPolestar）
+# 极星2 （SmartPolestar）
 
 极星车主 App 的 HarmonyOS 原生移植版 —— 纯 ArkTS 实现，Stage 模型。
 
-> 源应用：`app.c3garage.companion`（极星助手 v0.3.36，Android）
 > 目标平台：HarmonyOS 6.1.0 / API 23
 
 ---
