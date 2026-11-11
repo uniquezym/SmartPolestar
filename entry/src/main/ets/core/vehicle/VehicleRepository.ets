@@ -5,6 +5,7 @@ import { ServiceDiscovery } from '../net/ServiceDiscovery';
 import { VehicleStateReader } from '../net/VehicleStateReader';
 import { SessionState } from '../model/SessionState';
 import { SessionStore } from '../session/SessionStore';
+import { AuthService } from '../session/AuthService';
 import { VehicleState } from '../model/VehicleState';
 import { BusinessError, Log } from '../../common/Log';
 
@@ -26,14 +27,25 @@ export class VehicleRepository {
 
   /**
    * 加载本地会话。若不存在则抛出「需重新登录」错误。
+   *
+   * 已有会话时**就地更新**而不是替换对象：GrpcClient 持有的是构造时传入的
+   * SessionState 引用，若换成新对象，续期后写入的新 token 到不了 gRPC 通道手里。
    */
   async loadSession(): Promise<SessionState> {
-    const session = await SessionStore.load(this.context);
-    if (session === undefined) {
+    const stored = await SessionStore.load(this.context);
+    if (stored === undefined) {
       throw new BusinessError(401, '登录状态已失效，请重新登录');
     }
-    this.session = session;
-    return session;
+
+    if (this.session === undefined) {
+      this.session = stored;
+      return stored;
+    }
+
+    this.session.accessToken = stored.accessToken;
+    this.session.refreshToken = stored.refreshToken;
+    this.session.expiresAt = stored.expiresAt;
+    return this.session;
   }
 
   /**
@@ -57,14 +69,37 @@ export class VehicleRepository {
 
   /**
    * 拉取账号下的车辆列表。
+   *
+   * 对应 Android 端 ga0.m1417m 的调用链：
+   *   m1412e0(session, false)  先按需续期 token
+   *   m1417m(session)          再拉列表（内部对 401 强制续期后重试一次）
+   *
+   * 早期实现把异常吞掉返回空列表，导致「账号下没有发现车辆」掩盖了真实的
+   * 鉴权失败。现在异常向上抛出，由页面区分「会话失效」与「确实没有车」。
    */
   async fetchVehicles(): Promise<string[]> {
     const client = await this.prepare();
+    const session = client.getSession();
+
+    // ① 先按需续期，避免 access token 过期
+    await AuthService.refreshIfNeeded(this.context, session, false);
+
+    // ② 拉列表；服务端若判定 bearer 失效则强制续期后重试一次
     try {
-      this.vins = await VehicleRepository.listVehicles(client.getSession());
+      this.vins = await VehicleRepository.listVehicles(session);
     } catch (err) {
       const e = err as BusinessError;
-      Log.warn(`拉取车辆列表失败: ${e.message}`);
+      if (e.code === 401) {
+        Log.info('车辆列表被拒（401），强制续期后重试一次');
+        await AuthService.refreshIfNeeded(this.context, session, true);
+        this.vins = await VehicleRepository.listVehicles(session);
+      } else {
+        throw new BusinessError(e.code, e.message);
+      }
+    }
+
+    if (this.vins.length === 0) {
+      Log.warn('车辆列表为空：账号下确实没有车辆');
     }
     return this.vins;
   }

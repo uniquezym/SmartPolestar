@@ -5,6 +5,7 @@ import { ControlCoordinator } from '../core/vehicle/ControlCoordinator';
 import { VehicleCommands } from '../core/net/VehicleCommands';
 import { VehicleState } from '../core/model/VehicleState';
 import { StatusCard } from '../components/StatusCard';
+import { ForegroundLock } from '../core/vehicle/ForegroundLock';
 import { BusinessError, Log } from '../common/Log';
 
 /**
@@ -38,6 +39,73 @@ struct Index {
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     this.repository = new VehicleRepository(this.context);
     this.bootstrap();
+  }
+
+  /**
+   * 页面每次显示时触发（切回前台也会）。
+   *
+   * 后台期间令牌可能已过期，或本地会话被清理，因此回到前台要重新读取会话，
+   * 不能沿用 aboutToAppear 时缓存的那份。
+   */
+  onPageShow(): void {
+    if (this.repository === undefined) {
+      return;
+    }
+    // 首次显示由 bootstrap 负责，避免重复请求
+    if (!this.hasSession) {
+      return;
+    }
+    this.resume();
+  }
+
+  /**
+   * 页面隐藏时触发（切到后台）。
+   */
+  onPageHide(): void {
+    ForegroundLock.markBackgrounded();
+  }
+
+  /**
+   * 从后台恢复：先用指纹确认机主在场，再重新加载会话并刷新状态。
+   */
+  private async resume(): Promise<void> {
+    if (this.repository === undefined) {
+      return;
+    }
+
+    // 切回前台要求一次指纹验证；用户取消则保持锁定，不拉取数据
+    const unlocked = await ForegroundLock.tryUnlock('解锁极星2');
+    if (!unlocked) {
+      Log.info('未通过指纹验证，暂不刷新车辆状态');
+      this.errorMessage = '请完成指纹验证以继续';
+      return;
+    }
+
+    try {
+      await this.repository.loadSession();
+      await this.refresh();
+    } catch (err) {
+      const e = err as BusinessError;
+      if (e.code === 401) {
+        this.getUIContext().getRouter().replaceUrl({ url: 'pages/Login' });
+        return;
+      }
+      Log.warn(`恢复前台刷新失败: ${e.message}`);
+    }
+  }
+
+  /**
+   * 刷新按钮：若处于锁定态则先解锁再刷新。
+   */
+  private async refreshWithUnlock(): Promise<void> {
+    if (ForegroundLock.isLocked()) {
+      const unlocked = await ForegroundLock.tryUnlock('解锁极星2');
+      if (!unlocked) {
+        this.errorMessage = '请完成指纹验证以继续';
+        return;
+      }
+    }
+    await this.refresh();
   }
 
   /**
@@ -75,6 +143,7 @@ struct Index {
       return;
     }
     this.loading = true;
+    this.errorMessage = '';
     try {
       const states = await this.repository.readAllStates();
       if (states.length === 0) {
@@ -84,6 +153,12 @@ struct Index {
       this.applyState(states[0]);
     } catch (err) {
       const e = err as BusinessError;
+      if (e.code === 401) {
+        // 会话失效：回登录页，而不是显示成「没有车辆」
+        Log.warn('会话已失效，跳转登录页');
+        this.getUIContext().getRouter().replaceUrl({ url: 'pages/Login' });
+        return;
+      }
       this.errorMessage = e.message.length > 0 ? e.message : '状态读取失败';
       Log.error(`状态读取失败: ${e.message}`);
     } finally {
@@ -131,11 +206,21 @@ struct Index {
 
   /**
    * 执行车控动作。
+   *
+   * 前台期间的指纹验证已在切回前台时完成（见 ForegroundLock），此处不再重复验证。
    */
   private async control(action: string): Promise<void> {
     if (this.repository === undefined || this.context === undefined) {
       return;
     }
+
+    // 尚未通过前台解锁时，不下发任何指令
+    if (ForegroundLock.isLocked()) {
+      this.errorMessage = '请先完成指纹验证';
+      promptAction.showToast({ message: '请先完成指纹验证' });
+      return;
+    }
+
     const client = this.repository.getClient();
     const session = this.repository.getSession();
     if (client === undefined || session === undefined) {
@@ -203,7 +288,7 @@ struct Index {
               .backgroundColor($r('app.color.app_accent_soft'))
               .fontColor($r('app.color.app_primary_text'))
               .onClick(() => {
-                this.refresh();
+                this.refreshWithUnlock();
               })
           }
         }
