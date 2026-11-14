@@ -157,7 +157,7 @@ export class VehicleRepository {
    *
    * 对应 Android 端 m1411d0 的分支：按动作前缀只读相关的那一个域。
    *
-   * @param domain 'exterior' | 'climate' | 'air'
+   * @param domain 'exterior' | 'climate' | 'air' | 'battery'
    * @param vin    车辆 VIN
    */
   async readDomain(domain: string, vin: string): Promise<VehicleState> {
@@ -170,6 +170,9 @@ export class VehicleRepository {
         break;
       case 'air':
         await VehicleStateReader.readAir(client, vin, state);
+        break;
+      case 'battery':
+        await VehicleStateReader.readBattery(client, vin, state);
         break;
       default:
         await VehicleStateReader.readExterior(client, vin, state);

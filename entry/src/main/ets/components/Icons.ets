@@ -37,6 +37,8 @@ export enum AppIconName {
   FLASH = 'flash',
   /** 充电。 */
   CHARGE = 'charge',
+  /** 充电枪已连接（插头）。 */
+  CHARGE_LINK = 'charge_link',
   /** 车辆健康。 */
   HEALTH = 'health',
   /** 里程。 */
@@ -127,6 +129,13 @@ const SHAPES: Record<string, IconShape> = {
     path: 'M5,2 L19,2 A2.6,2.6 0 0 1 21.6,4.6 L21.6,19.4 A2.6,2.6 0 0 1 19,22 L5,22 A2.6,2.6 0 0 1 2.4,19.4 ' +
       'L2.4,4.6 A2.6,2.6 0 0 1 5,2 Z M12.6,4.6 L7.9,12.2 L11.4,12.2 L10.8,19.6 L16.5,10.6 L13,10.6 Z',
     strokeWidth: 1.7
+  },
+  // 充电枪已连接：细线插头（两根插脚 + 插头体）
+  [AppIconName.CHARGE_LINK]: {
+    path: 'M10.4,5 L10.4,10 M13.6,5 L13.6,10 ' +
+      'M8.2,10 L15.8,10 A1.2,1.2 0 0 1 17,11.2 L17,14.8 A1.2,1.2 0 0 1 15.8,16 L8.2,16 ' +
+      'A1.2,1.2 0 0 1 7,14.8 L7,11.2 A1.2,1.2 0 0 1 8.2,10 Z',
+    strokeWidth: 1.6
   },
   // Android: ic_health_service.xml
   [AppIconName.HEALTH]: {

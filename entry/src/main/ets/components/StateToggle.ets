@@ -49,11 +49,64 @@ export struct StateToggle {
   /** 语义类型。 */
   @Prop kind: ToggleKind = ToggleKind.LOCK;
   /** 当前阶段。 */
-  @Prop phase: TogglePhase = TogglePhase.OFF;
+  @Prop @Watch('onPhaseChanged') phase: TogglePhase = TogglePhase.OFF;
   /** 是否禁用（互斥功能：另一项开启时置灰）。 */
   @Prop disabled: boolean = false;
   /** 点击回调，由父组件负责下发指令并回写 phase。 */
   onTap?: (kind: ToggleKind) => void;
+
+  /** 呼吸光晕的动画相位：0=收缩，1=扩散。 */
+  @State pulse: number = 0;
+  /** 呼吸动画的定时器句柄。 */
+  private pulseTimer: number = -1;
+
+  aboutToAppear(): void {
+    // 首次渲染若已是开启态，@Watch 不会触发，这里补一次启动。
+    if (this.phase === TogglePhase.ON) {
+      this.startPulse();
+    }
+  }
+
+  aboutToDisappear(): void {
+    this.stopPulse();
+  }
+
+  /**
+   * 启动呼吸动画定时器。
+   *
+   * ArkUI 的 animation 属性只对「属性值发生变化」生效，静态值配 animation
+   * 不会动。因此用定时器交替切换相位，再由 animation 做平滑过渡。
+   */
+  private startPulse(): void {
+    if (this.pulseTimer !== -1) {
+      return;
+    }
+    this.pulseTimer = setInterval(() => {
+      this.pulse = this.pulse === 0 ? 1 : 0;
+    }, 1400);
+  }
+
+  /**
+   * 停止呼吸动画定时器。
+   */
+  private stopPulse(): void {
+    if (this.pulseTimer !== -1) {
+      clearInterval(this.pulseTimer);
+      this.pulseTimer = -1;
+    }
+  }
+
+  /**
+   * 开关阶段变化时启停呼吸动画。
+   */
+  private onPhaseChanged(): void {
+    if (this.phase === TogglePhase.ON) {
+      this.startPulse();
+    } else {
+      this.stopPulse();
+      this.pulse = 0;
+    }
+  }
 
   /**
    * 当前状态文案（标签显示的文字）。
@@ -99,14 +152,15 @@ export struct StateToggle {
       Stack({ alignContent: Alignment.Center }) {
         // 开启态：呼吸光晕
         if (this.phase === TogglePhase.ON) {
-          // 呼吸光晕：用 Stack + border 实现（Circle 的 stroke 不支持线宽参数）
+          // 呼吸光晕：用 Stack + border 实现（Circle 的 stroke 不支持线宽参数）。
+          // 直径与透明度都随相位变化，形成扩散 / 收缩的脉冲。
           Stack()
-            .width(58)
-            .height(58)
-            .borderRadius(29)
+            .width(this.pulse === 0 ? 54 : 62)
+            .height(this.pulse === 0 ? 54 : 62)
+            .borderRadius(this.pulse === 0 ? 27 : 31)
             .border({ width: 1, color: $r('app.color.app_accent') })
-            .opacity(0.28)
-            .animation({ duration: 2800, curve: Curve.EaseInOut, iterations: -1 })
+            .opacity(this.pulse === 0 ? 0.1 : 0.38)
+            .animation({ duration: 1400, curve: Curve.EaseInOut })
         }
 
         // 图标

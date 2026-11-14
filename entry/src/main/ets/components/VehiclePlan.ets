@@ -1,3 +1,5 @@
+import { AppIcon, AppIconName } from './Icons';
+
 /**
  * 车模标记点的位置与文案。
  *
@@ -38,6 +40,13 @@ export struct VehiclePlan {
   @Prop hoodOpen: boolean = false;
   /** 充电口开启 —— 充电口标记点显示警示色。 */
   @Prop portOpen: boolean = false;
+  /**
+   * 充电枪已连接 —— 充电口标记点改用插头图标 + 呼吸光环，并引出一段充电线。
+   *
+   * 原版 Android 车模没有充电指示（g10 只画「充电口打开」橙色标签），
+   * 这里沿用车模既有的标记点语言，把充电状态交给同一个标记点表达。
+   */
+  @Prop @Watch('onChargingChanged') charging: boolean = false;
   /** 尾门解锁 —— 尾门标记点显示警示色。 */
   @Prop trunkUnlocked: boolean = false;
   /** 尾门指令执行中 —— 标记点显示蓝色描边与旋转指示器。 */
@@ -63,9 +72,58 @@ export struct VehiclePlan {
   private readonly viewH: number = 340;
   /** 屏幕密度：1vp 对应多少 px。 */
   private density: number = 3;
+  /** 呼吸光环的动画相位：0=扩散，1=收缩。 */
+  @State chargePulse: number = 0;
+  /** 呼吸动画的定时器句柄。 */
+  private pulseTimer: number = -1;
 
   aboutToAppear(): void {
     this.density = this.getUIContext().vp2px(1);
+    // 首次渲染若已是充电态，@Watch 不会触发，这里补一次启动。
+    if (this.charging) {
+      this.startPulse();
+    }
+  }
+
+  aboutToDisappear(): void {
+    this.stopPulse();
+  }
+
+  /**
+   * 启动呼吸动画定时器。
+   *
+   * ArkUI 的 animation 属性只对「属性值发生变化」生效，静态值配 animation
+   * 不会动。因此这里用定时器交替切换相位，再由 animateTo 做平滑过渡。
+   */
+  private startPulse(): void {
+    if (this.pulseTimer !== -1) {
+      return;
+    }
+    this.pulseTimer = setInterval(() => {
+      this.chargePulse = this.chargePulse === 0 ? 1 : 0;
+    }, 900);
+  }
+
+  /**
+   * 停止呼吸动画定时器。
+   */
+  private stopPulse(): void {
+    if (this.pulseTimer !== -1) {
+      clearInterval(this.pulseTimer);
+      this.pulseTimer = -1;
+    }
+  }
+
+  /**
+   * 充电连接状态变化时启停呼吸动画。
+   */
+  private onChargingChanged(): void {
+    if (this.charging) {
+      this.startPulse();
+    } else {
+      this.stopPulse();
+      this.chargePulse = 0;
+    }
   }
 
   /**
@@ -90,6 +148,44 @@ export struct VehiclePlan {
     .position({
       x: marker.x - 13,
       y: marker.y - 13
+    })
+  }
+
+  /**
+   * 充电口标记点：充电枪已连接时改用插头图标 + 呼吸光环。
+   *
+   * 沿用车模既有的标记点语言：常态是纸底细框的中性圆点，
+   * 「部件打开」才升级为橙色实心。充电属于连接状态而非部件状态，
+   * 因此保持纸底，只把描边与图标换成强调色，再加一圈呼吸光环表达
+   * 「已接通」。视觉重量与「盖 / 尾」保持一致，不会压过车身线稿。
+   */
+  @Builder
+  chargingPortMarker() {
+    Stack({ alignContent: Alignment.Center }) {
+      // 呼吸光环：直径与透明度都随相位变化，形成扩散 / 收缩的脉冲。
+      // 由定时器切换 chargePulse，再用 animateTo 平滑过渡。
+      Stack()
+        .width(this.chargePulse === 0 ? 30 : 38)
+        .height(this.chargePulse === 0 ? 30 : 38)
+        .borderRadius(this.chargePulse === 0 ? 15 : 19)
+        .border({ width: 1, color: $r('app.color.app_accent') })
+        .opacity(this.chargePulse === 0 ? 0.15 : 0.5)
+        .animation({ duration: 900, curve: Curve.EaseInOut })
+
+      AppIcon({
+        name: AppIconName.CHARGE_LINK,
+        iconSize: 15,
+        color: $r('app.color.app_accent')
+      })
+    }
+    .width(26)
+    .height(26)
+    .borderRadius(13)
+    .backgroundColor($r('app.color.app_surface'))
+    .border({ width: 1.2, color: $r('app.color.app_accent') })
+    .position({
+      x: 52 - 13,
+      y: 238 - 13
     })
   }
 
@@ -252,6 +348,21 @@ export struct VehiclePlan {
             .height(`${this.viewH}px`)
         }
 
+        // 充电线：充电枪已连接时，从充电口标记点左上角引出一段短线，
+        // 斜向上再折平，暗示线缆走向车外。
+        // 起点取圆点左上 45° 方向的边缘点（约 43,229），与圆相切不留缝；
+        // 标记点在上层会盖住圆内部分，线必须画到圆外才会可见。
+        if (this.charging) {
+          Path({ commands: 'M43 229 L30 214 L12 214' })
+            .fill(Color.Transparent)
+            .stroke($r('app.color.app_accent'))
+            .strokeWidth(this.sw(1.6))
+            .strokeLineCap(LineCapStyle.Round)
+            .strokeLineJoin(LineJoinStyle.Round)
+            .width(`${this.viewW}px`)
+            .height(`${this.viewH}px`)
+        }
+
         // 内部分隔线
         Path({ commands: 'M45 54h110M61 84h78M39 98h122M61 234h78M39 254h122' })
           .fill(Color.Transparent)
@@ -290,7 +401,11 @@ export struct VehiclePlan {
 
       // ---------- 位置标记点（vp 坐标，与缩放后的车模对齐） ----------
       this.marker(new PlanMarker(100, 22, '盖', this.hoodOpen))
-      this.marker(new PlanMarker(52, 238, '口', this.portOpen))
+      if (this.charging) {
+        this.chargingPortMarker()
+      } else {
+        this.marker(new PlanMarker(52, 238, '口', this.portOpen))
+      }
 
       // 尾门标记点：可点击，解锁后走警示色，执行中显示蓝色描边与转圈
       Stack({ alignContent: Alignment.Center }) {
@@ -327,8 +442,9 @@ export struct VehiclePlan {
       // 说明文字
       Text('机盖').fontSize(9).fontColor($r('app.color.app_tertiary_text'))
         .position({ x: 118, y: 14 })
+      // 充电口标签上移，给充电线让出位置
       Text('充电口').fontSize(9).fontColor($r('app.color.app_tertiary_text'))
-        .position({ x: 2, y: 206 })
+        .position({ x: 2, y: 196 })
     }
     .width(this.viewW)
     .height(this.viewH)

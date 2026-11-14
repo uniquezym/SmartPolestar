@@ -43,6 +43,14 @@ struct Index {
    */
   private static readonly TEXT_TICK_INTERVAL_MS: number = 30000;
 
+  /**
+   * 充电中轮询电池状态的周期（毫秒）。
+   *
+   * 只在「充电中 / 智能充电」时启用，且只读 battery 一个域，
+   * 避免每分钟拉全量状态（8 个域）。
+   */
+  private static readonly CHARGE_POLL_INTERVAL_MS: number = 60000;
+
   /** 正在拉取车辆状态。顶栏右上角显示刷新动效。 */
   @State loading: boolean = false;
   /** 下拉刷新指示器状态。 */
@@ -133,6 +141,10 @@ struct Index {
   private repository: VehicleRepository | undefined = undefined;
   /** 「距上次刷新」文案的定时器句柄。 */
   private textTimer: number = -1;
+  /** 充电中轮询电池状态的定时器句柄。 */
+  private chargeTimer: number = -1;
+  /** 充电轮询是否已有请求在途，避免并发重复拉取。 */
+  private chargePolling: boolean = false;
 
   aboutToAppear(): void {
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -184,6 +196,7 @@ struct Index {
    */
   onPageHide(): void {
     this.stopTextTimer();
+    this.stopChargeTimer();
   }
 
   /**
@@ -191,6 +204,80 @@ struct Index {
    */
   aboutToDisappear(): void {
     this.stopTextTimer();
+    this.stopChargeTimer();
+  }
+
+  /**
+   * 启动充电轮询。
+   *
+   * 只在充电中才启动；已经启动则不重复启动。脱离充电状态时由
+   * syncChargeTimer 在下一次轮询后自动停止。
+   */
+  private startChargeTimer(): void {
+    if (this.chargeTimer !== -1) {
+      return;
+    }
+    this.chargeTimer = setInterval(() => {
+      this.pollBattery();
+    }, Index.CHARGE_POLL_INTERVAL_MS);
+    Log.info('充电中：启动电池状态轮询');
+  }
+
+  /**
+   * 停止充电轮询。
+   */
+  private stopChargeTimer(): void {
+    if (this.chargeTimer !== -1) {
+      clearInterval(this.chargeTimer);
+      this.chargeTimer = -1;
+      Log.info('停止电池状态轮询');
+    }
+  }
+
+  /**
+   * 根据当前充电状态启停轮询。
+   */
+  private syncChargeTimer(): void {
+    if (this.isCharging()) {
+      this.startChargeTimer();
+    } else {
+      this.stopChargeTimer();
+    }
+  }
+
+  /**
+   * 静默拉一次电池状态。
+   *
+   * 只读 battery 一个域，不触发整页刷新动效。
+   * 请求在途时直接跳过，避免并发。
+   */
+  private async pollBattery(): Promise<void> {
+    if (this.repository === undefined || this.vin.length === 0) {
+      return;
+    }
+    if (this.chargePolling) {
+      return;
+    }
+    this.chargePolling = true;
+    try {
+      const state = await this.repository.readDomain('battery', this.vin);
+      this.battery = state.battery ?? -1;
+      this.range = state.range ?? -1;
+      this.charging = state.charging;
+      this.chargerConnection = state.chargerConnection;
+      this.chargingType = state.chargingType;
+      this.powerWatts = state.powerWatts ?? 0;
+      this.currentAmps = state.currentAmps ?? 0;
+      this.remainingMinutes = state.timeToFullMinutes ?? 0;
+    } catch (err) {
+      const e = err as BusinessError;
+      // 静默失败：轮询出错不该打扰用户，也不该把整页刷成错误态
+      Log.warn(`充电轮询失败: code=${e.code} ${e.message}`);
+    } finally {
+      this.chargePolling = false;
+      // 充电状态可能已变化（充满后转为已完成），据此启停轮询
+      this.syncChargeTimer();
+    }
   }
 
   /**
@@ -245,6 +332,8 @@ struct Index {
     this.startTextTimer();
     // 切回前台立即重算一次文案，不等 30 秒定时器
     this.refreshText();
+    // 充电中的轮询在页面隐藏时已停，回到前台需要恢复
+    this.syncChargeTimer();
     this.resume();
   }
 
@@ -468,6 +557,8 @@ struct Index {
     this.powerWatts = state.powerWatts ?? 0;
     this.currentAmps = state.currentAmps ?? 0;
     this.remainingMinutes = state.timeToFullMinutes ?? 0;
+    // 充电状态决定是否启动轮询
+    this.syncChargeTimer();
 
     this.locked = state.locked;
     this.windows = state.windows;
@@ -579,6 +670,74 @@ struct Index {
       return '—';
     }
     return `${Math.round(this.range * 100 / this.battery)} km`;
+  }
+
+  /**
+   * 是否处于充电中。
+   *
+   * 协议字段 charging 的取值见 CHARGING_LABELS：
+   * 1 = 充电中，6 = 智能充电。这两种都算正在充电。
+   */
+  private isCharging(): boolean {
+    return this.charging === '充电中' || this.charging === '智能充电';
+  }
+
+  /**
+   * 充电枪是否已连接（含正在充电）。
+   *
+   * 充电枪插上但还没开始充电（计划中 / 空闲）时，chargerConnection 已是
+   * 「已连接」而 charging 还不是「充电中」—— 这时也要在车模上体现出来，
+   * 否则用户插了枪却看不到任何反应。
+   */
+  private chargingConnected(): boolean {
+    return this.chargerConnection === '已连接' || this.isCharging();
+  }
+
+  /**
+   * 充电功率文案。≥1000W 显示 kW，否则显示 W。
+   *
+   * 还原自原版 MainActivity.m325d0。
+   */
+  private powerText(): string {
+    if (this.powerWatts <= 0) {
+      return '';
+    }
+    if (this.powerWatts >= 1000) {
+      return `${(this.powerWatts / 1000).toFixed(1)} kW`;
+    }
+    return `${this.powerWatts} W`;
+  }
+
+  /**
+   * 充电电流文案。
+   */
+  private currentText(): string {
+    if (this.currentAmps <= 0) {
+      return '';
+    }
+    return `${Math.round(this.currentAmps)} A`;
+  }
+
+  /**
+   * 充电枪已连接时显示在「电量」标题后面的 inline 补充信息。
+   *
+   * 充电中显示功率 · 电流；只是插了枪还没开始充电时显示「已连接」。
+   * 放在标题后面而非另起一行，充电时行数不变，下方内容不会被顶下去。
+   */
+  private chargeInlineText(): string {
+    const parts: string[] = [];
+    const power = this.powerText();
+    if (power.length > 0) {
+      parts.push(power);
+    }
+    const current = this.currentText();
+    if (current.length > 0) {
+      parts.push(current);
+    }
+    if (parts.length === 0) {
+      return this.chargerConnection === '已连接' ? '已连接' : '';
+    }
+    return parts.join(' · ');
   }
 
   /**
@@ -729,14 +888,6 @@ struct Index {
    */
   private flipMileage(): void {
     this.mileageMode = (this.mileageMode + 1) % 3;
-  }
-
-  /**
-   * 是否已连接充电线。
-   */
-  private chargingConnected(): boolean {
-    return this.chargerConnection === '已连接' ||
-      this.charging === '充电中' || this.charging === '智能充电';
   }
 
   /**
@@ -1286,6 +1437,7 @@ struct Index {
                 doorStates: this.doorStates,
                 hoodOpen: this.hoodOpen,
                 portOpen: this.portOpen,
+                charging: this.chargingConnected(),
                 trunkUnlocked: this.trunkUnlocked,
                 trunkBusy: this.trunkBusy,
                 onTrunkTap: () => {
@@ -1350,9 +1502,19 @@ struct Index {
             // ---------- 电量与续航 ----------
             Row() {
               Column({ space: 0 }) {
-                Text('电量')
-                  .fontSize(12)
-                  .fontColor($r('app.color.app_tertiary_text'))
+                // 「电量」标题行：充电中时 inline 追加功率 · 电流，
+                // 放在标题后面而不是另起一行，行数不变，下方内容不会被顶下去。
+                Row({ space: 6 }) {
+                  Text('电量')
+                    .fontSize(12)
+                    .fontColor($r('app.color.app_tertiary_text'))
+                  if (this.chargingConnected()) {
+                    Text(this.chargeInlineText())
+                      .fontSize(12)
+                      .fontColor($r('app.color.app_accent'))
+                  }
+                }
+                .alignItems(VerticalAlign.Bottom)
                 Row({ space: 2 }) {
                   Text(this.battery >= 0 ? `${this.battery}` : '—')
                     .fontSize(46)
