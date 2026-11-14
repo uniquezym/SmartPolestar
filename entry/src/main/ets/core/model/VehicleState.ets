@@ -35,7 +35,6 @@ export class VehicleState {
   tripManualEnergyWh: number | undefined = undefined;
   tripAutomaticEnergyWh: number | undefined = undefined;
   tripSinceChargeEnergyWh: number | undefined = undefined;
-  manualAverageSpeedKph: number | undefined = undefined;
 
   // ---- 驻车空调 ----
   climate: string = '未知';
@@ -67,6 +66,12 @@ export class VehicleState {
   tripManualKm: number | undefined = undefined;
   tripAutomaticKm: number | undefined = undefined;
   tripSinceChargeKm: number | undefined = undefined;
+  /** 手动小计平均车速（km/h）。odometer field 5。 */
+  manualAverageSpeedKph: number | undefined = undefined;
+  /** 自动小计平均车速（km/h）。odometer field 6。 */
+  automaticAverageSpeedKph: number | undefined = undefined;
+  /** 自充电小计平均车速（km/h）。odometer field 8。 */
+  sinceChargeAverageSpeedKph: number | undefined = undefined;
 
   // ---- 健康 ----
   healthStatus: string = '未知';

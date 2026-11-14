@@ -77,7 +77,8 @@ export struct StateRow {
         .width(22)
         .height(22)
 
-      Column({ space: 1 }) {
+      // 标题与下方数值/详细地址之间留出呼吸空间
+      Column({ space: 6 }) {
         Text(this.label)
           .fontSize(12.5)
           .fontColor($r('app.color.app_secondary_text'))

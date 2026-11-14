@@ -50,10 +50,11 @@ export class VehicleStateReader {
     state.battery = ProtoValue.asInteger(ProtoValue.get(fields, 2));
     state.range = ProtoValue.asInteger(ProtoValue.get(fields, 4));
     // 还原自 ga0.m1403Q：field 3/12/13 是 kWh/100km 均耗，
-    // field 14/15/16 是 Wh 累计能耗。
-    state.tripManualAverageEnergyKwhPer100Km = ProtoValue.asFiniteDouble(ProtoValue.get(fields, 3));
-    state.tripAutomaticAverageEnergyKwhPer100Km = ProtoValue.asFiniteDouble(ProtoValue.get(fields, 12));
-    state.tripSinceChargeAverageEnergyKwhPer100Km = ProtoValue.asFiniteDouble(ProtoValue.get(fields, 13));
+    // field 14/15/16 是 Wh 累计能耗。这几个字段走 m1384q / m1350G，
+    // 都是 m1372i 的包装，需兼容 4 字节 float。
+    state.tripManualAverageEnergyKwhPer100Km = ProtoValue.asFiniteNumber(ProtoValue.get(fields, 3));
+    state.tripAutomaticAverageEnergyKwhPer100Km = ProtoValue.asFiniteNumber(ProtoValue.get(fields, 12));
+    state.tripSinceChargeAverageEnergyKwhPer100Km = ProtoValue.asFiniteNumber(ProtoValue.get(fields, 13));
     state.tripManualEnergyWh = ProtoValue.asNonNegative(ProtoValue.get(fields, 14));
     state.tripAutomaticEnergyWh = ProtoValue.asNonNegative(ProtoValue.get(fields, 15));
     state.tripSinceChargeEnergyWh = ProtoValue.asNonNegative(ProtoValue.get(fields, 16));
@@ -63,7 +64,7 @@ export class VehicleStateReader {
     state.chargerConnection = VehicleState.enumLabel(
       ProtoValue.asInteger(ProtoValue.get(fields, 6)), CHARGER_CONNECTION_LABELS);
     state.powerWatts = ProtoValue.asInteger(ProtoValue.get(fields, 10));
-    state.currentAmps = ProtoValue.asFiniteDouble(ProtoValue.get(fields, 11));
+    state.currentAmps = ProtoValue.asFiniteNumber(ProtoValue.get(fields, 11));
     state.chargingType = VehicleState.enumLabel(
       ProtoValue.asInteger(ProtoValue.get(fields, 17)), CHARGING_TYPE_LABELS);
     state.chargerPowerStatus = VehicleState.enumLabel(
@@ -120,8 +121,8 @@ export class VehicleStateReader {
     // 早期版本误映射为「内循环 / 外循环」，原版代码中不存在该语义，已更正。
     state.climateRunMode = VehicleState.enumLabel(
       ProtoValue.asInteger(ProtoValue.get(fields, 6)), CLIMATE_RUN_MODE_LABELS);
-    state.climateTemperatureC = ProtoValue.asFiniteDouble(ProtoValue.get(fields, 7));
-    state.climateTargetTemperatureC = ProtoValue.asFiniteDouble(ProtoValue.get(fields, 8));
+    state.climateTemperatureC = ProtoValue.asFiniteNumber(ProtoValue.get(fields, 7));
+    state.climateTargetTemperatureC = ProtoValue.asFiniteNumber(ProtoValue.get(fields, 8));
     state.climateStateAt = Date.now();
   }
 
@@ -135,7 +136,7 @@ export class VehicleStateReader {
 
     state.air = VehicleState.enumLabel(ProtoValue.asInteger(ProtoValue.get(fields, 6)), AIR_LABELS);
     state.airQualityIndex = ProtoValue.asInteger(ProtoValue.get(fields, 9));
-    state.pm25UgM3 = ProtoValue.asFiniteDouble(ProtoValue.get(fields, 10));
+    state.pm25UgM3 = ProtoValue.asFiniteNumber(ProtoValue.get(fields, 10));
     state.airStateAt = Date.now();
   }
 
@@ -146,17 +147,33 @@ export class VehicleStateReader {
     const response = await client.callStatus(GrpcClient.SERVICE_ODOMETER, 'GetLatestOdometer', vin);
     const fields = VehicleStateReader.unwrap(response, 3);
 
-    // 原始单位为米，统一换算为公里
-    const meters = ProtoValue.asFiniteDouble(ProtoValue.get(fields, 2));
+    // 总里程：原始单位为米，按 m1352I 取整数后除以 1000 换算为公里
+    const meters = ProtoValue.asInteger(ProtoValue.get(fields, 2));
     if (meters !== undefined) {
-      state.odometerKm = meters / 1000;
+      state.odometerKm = Math.trunc(meters / 1000);
     }
-    state.tripManualKm = ProtoValue.asFiniteDouble(ProtoValue.get(fields, 3));
-    state.tripAutomaticKm = ProtoValue.asFiniteDouble(ProtoValue.get(fields, 4));
-    state.tripSinceChargeKm = ProtoValue.asFiniteDouble(ProtoValue.get(fields, 5));
-    // 还原自 ga0.m1409X：field 5/6 是两次行程均速，field 7 是自充电里程，field 8 是均速。
-    state.manualAverageSpeedKph = ProtoValue.asInteger(ProtoValue.get(fields, 6));
+    // 还原自 ga0.m1409X：field 3/4/7 分别是手动 / 自动 / 自充电小计里程。
+    // 这三个字段用 m1372i 读取，既接受 8 字节 double 也接受 4 字节 float，
+    // 因此不能用 asFiniteDouble（只认 8 字节，float 会读成 NaN）。
+    state.tripManualKm = ProtoValue.asFiniteNumber(ProtoValue.get(fields, 3));
+    state.tripAutomaticKm = ProtoValue.asFiniteNumber(ProtoValue.get(fields, 4));
+    state.tripSinceChargeKm = ProtoValue.asFiniteNumber(ProtoValue.get(fields, 7));
+    // field 5/6/8 分别是三个口径的平均车速（km/h）。
+    state.manualAverageSpeedKph = ProtoValue.asInteger(ProtoValue.get(fields, 5));
+    state.automaticAverageSpeedKph = ProtoValue.asInteger(ProtoValue.get(fields, 6));
+    state.sinceChargeAverageSpeedKph = ProtoValue.asInteger(ProtoValue.get(fields, 8));
     state.odometerStateAt = Date.now();
+
+    // 打印里程原始字段，便于核对协议里是否还有独立的行驶时长字段
+    const raw: string[] = [];
+    fields.forEach((value: number | Uint8Array, fieldNumber: number) => {
+      if (value instanceof Uint8Array) {
+        raw.push(`${fieldNumber}=bytes(${value.length})`);
+      } else {
+        raw.push(`${fieldNumber}=${value}`);
+      }
+    });
+    Log.info(`里程原始字段: ${raw.join(', ')}`);
   }
 
   /**

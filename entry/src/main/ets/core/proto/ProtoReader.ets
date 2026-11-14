@@ -267,9 +267,11 @@ export class ProtoValue {
 
   /**
    * 读取非负浮点数，负值返回 undefined。还原自 m1350G。
+   *
+   * m1350G 内部走 m1384q → m1372i，因此同样要兼容 4 字节 float。
    */
   static asNonNegative(value: number | Uint8Array | undefined): number | undefined {
-    const d = ProtoValue.asFiniteDouble(value);
+    const d = ProtoValue.asFiniteNumber(value);
     if (d === undefined || d < 0) {
       return undefined;
     }

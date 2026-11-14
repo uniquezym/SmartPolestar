@@ -70,6 +70,20 @@ struct Index {
   @State odometerKm: number = -1;
   @State tripManualKm: number = -1;
   @State tripAutomaticKm: number = -1;
+  /** 自充电小计里程。 */
+  @State tripSinceChargeKm: number = -1;
+  /** 三个口径的平均车速（km/h）。 */
+  @State manualAverageSpeedKph: number = -1;
+  @State automaticAverageSpeedKph: number = -1;
+  @State sinceChargeAverageSpeedKph: number = -1;
+  /** 三个口径的平均能耗（kWh/100km）。 */
+  @State manualAverageEnergyKwhPer100Km: number = -1;
+  @State automaticAverageEnergyKwhPer100Km: number = -1;
+  @State sinceChargeAverageEnergyKwhPer100Km: number = -1;
+  /** 三个口径的累计能耗（Wh）。 */
+  @State manualEnergyWh: number = -1;
+  @State automaticEnergyWh: number = -1;
+  @State sinceChargeEnergyWh: number = -1;
   @State parkedTime: string = '—';
   @State parkedCoordinate: string = '';
   /** 停车地点名（经纬度反查结果）。解析中时为空串。 */
@@ -461,6 +475,16 @@ struct Index {
     this.odometerKm = state.odometerKm ?? -1;
     this.tripManualKm = state.tripManualKm ?? -1;
     this.tripAutomaticKm = state.tripAutomaticKm ?? -1;
+    this.tripSinceChargeKm = state.tripSinceChargeKm ?? -1;
+    this.manualAverageSpeedKph = state.manualAverageSpeedKph ?? -1;
+    this.automaticAverageSpeedKph = state.automaticAverageSpeedKph ?? -1;
+    this.sinceChargeAverageSpeedKph = state.sinceChargeAverageSpeedKph ?? -1;
+    this.manualAverageEnergyKwhPer100Km = state.tripManualAverageEnergyKwhPer100Km ?? -1;
+    this.automaticAverageEnergyKwhPer100Km = state.tripAutomaticAverageEnergyKwhPer100Km ?? -1;
+    this.sinceChargeAverageEnergyKwhPer100Km = state.tripSinceChargeAverageEnergyKwhPer100Km ?? -1;
+    this.manualEnergyWh = state.tripManualEnergyWh ?? -1;
+    this.automaticEnergyWh = state.tripAutomaticEnergyWh ?? -1;
+    this.sinceChargeEnergyWh = state.tripSinceChargeEnergyWh ?? -1;
 
     if (state.parkedTimestamp !== undefined && state.parkedTimestamp > 0) {
       this.parkedTime = this.formatParkedTime(state.parkedTimestamp);
@@ -594,6 +618,110 @@ struct Index {
       return '自动小计';
     }
     return '总里程';
+  }
+
+  /**
+   * 当前口径的平均车速（km/h）。
+   */
+  private mileageAverageSpeed(): number {
+    if (this.mileageMode === 1) {
+      return this.manualAverageSpeedKph;
+    }
+    if (this.mileageMode === 2) {
+      return this.automaticAverageSpeedKph;
+    }
+    return -1;
+  }
+
+  /**
+   * 当前口径的平均能耗（kWh/100km）。
+   */
+  private mileageAverageEnergy(): number {
+    if (this.mileageMode === 1) {
+      return this.manualAverageEnergyKwhPer100Km;
+    }
+    if (this.mileageMode === 2) {
+      return this.automaticAverageEnergyKwhPer100Km;
+    }
+    return -1;
+  }
+
+  /**
+   * 当前口径的行驶时长。
+   *
+   * 车端没有单独的时长字段，用「小计里程 ÷ 平均车速」推算；
+   * 里程或均速缺失时返回空串，不显示该项。
+   */
+  private mileageDuration(): string {
+    if (this.mileageMode === 0) {
+      return '';
+    }
+    let distance = this.odometerKm;
+    if (this.mileageMode === 1) {
+      distance = this.tripManualKm;
+    } else if (this.mileageMode === 2) {
+      distance = this.tripAutomaticKm;
+    }
+    const speed = this.mileageAverageSpeed();
+    if (distance < 0 || speed <= 0) {
+      return '';
+    }
+    const hours = distance / speed;
+    if (!Number.isFinite(hours) || hours <= 0) {
+      return '';
+    }
+    const totalMinutes = Math.round(hours * 60);
+    const h = Math.floor(totalMinutes / 60);
+    const m = totalMinutes % 60;
+    if (h <= 0) {
+      return `${m} 分钟`;
+    }
+    return `${h} 小时 ${m} 分`;
+  }
+
+  /**
+   * 当前口径的副信息行。
+   *
+   * 还原自 MainActivity.m320Q0：
+   *   - 总里程：三个小计的累计能耗（Wh / 1000 → kWh）
+   *   - 手动 / 自动小计：平均能耗（kWh/100km）· 平均时速（km/h）· 行驶时长
+   */
+  private mileageNote(): string {
+    const parts: string[] = [];
+
+    if (this.mileageMode === 0) {
+      // 总里程：手动 / 自动 / 充后 三个小计的累计能耗
+      const manual = this.manualEnergyWh;
+      const automatic = this.automaticEnergyWh;
+      const sinceCharge = this.sinceChargeEnergyWh;
+      if (manual >= 0) {
+        parts.push(`手动 ${(manual / 1000).toFixed(2)}`);
+      }
+      if (automatic >= 0) {
+        parts.push(`自动 ${(automatic / 1000).toFixed(2)}`);
+      }
+      if (sinceCharge >= 0) {
+        parts.push(`充后 ${(sinceCharge / 1000).toFixed(2)}`);
+      }
+      if (parts.length > 0) {
+        parts.push('kWh');
+      }
+      return parts.join(' · ');
+    }
+
+    const energy = this.mileageAverageEnergy();
+    if (energy >= 0) {
+      parts.push(`${energy.toFixed(1)} kWh/100km`);
+    }
+    const speed = this.mileageAverageSpeed();
+    if (speed >= 0) {
+      parts.push(`${speed} km/h`);
+    }
+    const duration = this.mileageDuration();
+    if (duration.length > 0) {
+      parts.push(duration);
+    }
+    return parts.join(' · ');
   }
 
   /**
@@ -1053,7 +1181,7 @@ struct Index {
         .width(19)
         .height(19)
       Text(label)
-        .fontSize(9.5)
+        .fontSize(12)
         .fontColor(this.currentTab === index
           ? $r('app.color.app_accent')
           : $r('app.color.app_tertiary_text'))
@@ -1072,14 +1200,18 @@ struct Index {
       if (this.currentTab === 0) {
         Refresh({ refreshing: $$this.refreshing }) {
           Scroll() {
-          Column({ space: 16 }) {
+          // 区块间距由各区块的 margin 表达（space 设为 0）。
+          // 里程区固定预留副信息行的一行高度，这行高度正好抵消
+          // 顶栏到车模之间的间距，切换里程口径时车模位置不变。
+          Column({ space: 0 }) {
             // ---------- 顶栏：车型 + 可切换里程 ----------
             Row() {
-              Column({ space: 5 }) {
+              Column() {
                 Text(this.modelName)
                   .fontSize(23)
                   .fontWeight(FontWeight.Normal)
                   .fontColor($r('app.color.app_primary_text'))
+                  .margin({ bottom: 5 })
                 Row({ space: 6 }) {
                   Text(this.mileageLabel())
                     .fontSize(11)
@@ -1091,6 +1223,25 @@ struct Index {
                     .fontSize(10.5)
                     .fontColor($r('app.color.app_tertiary_text'))
                 }
+                .onClick(() => {
+                  this.flipMileage();
+                })
+                // 副信息行固定占一行高度，内容为空时也保留位置。
+                // 里程区因此始终是两行的高度，切换口径时车模不会下移。
+                // 宽度跟随内容，避免点击文案之外的空白也触发切换。
+                Row() {
+                  if (this.mileageNote().length > 0) {
+                    Text(this.mileageNote())
+                      .fontSize(10.5)
+                      .fontColor($r('app.color.app_tertiary_text'))
+                      .maxLines(1)
+                      .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  }
+                }
+                .height(14)
+                .alignItems(VerticalAlign.Center)
+                .margin({ top: 2 })
+                // 副信息行同样可点，切换里程口径
                 .onClick(() => {
                   this.flipMileage();
                 })
@@ -1113,7 +1264,9 @@ struct Index {
               }
             }
             .width('100%')
-            .padding({ top: 20, bottom: 4 })
+            // 顶栏底部不再额外留间距：副信息行（固定 14vp 高 + 2vp 上边距）
+            // 已经撑出这一段，切换里程口径时车模位置始终不变。
+            .margin({ top: 20, bottom: 0 })
 
             if (this.errorMessage.length > 0) {
               Text(this.errorMessage)
@@ -1123,6 +1276,7 @@ struct Index {
                 .padding(12)
                 .backgroundColor($r('app.color.app_error_soft'))
                 .borderRadius(4)
+                .margin({ top: 16 })
             }
 
             // ---------- 车辆图示 + 右侧快捷开关 ----------
@@ -1177,6 +1331,7 @@ struct Index {
             }
             .width('100%')
             .justifyContent(FlexAlign.Center)
+            .margin({ top: 16 })
 
             // ---------- 车型信息 ----------
             Column({ space: 2 }) {
@@ -1190,12 +1345,13 @@ struct Index {
             }
             .width('100%')
             .alignItems(HorizontalAlign.Center)
+            .margin({ top: 16 })
 
             // ---------- 电量与续航 ----------
             Row() {
               Column({ space: 0 }) {
                 Text('电量')
-                  .fontSize(9.5)
+                  .fontSize(12)
                   .fontColor($r('app.color.app_tertiary_text'))
                 Row({ space: 2 }) {
                   Text(this.battery >= 0 ? `${this.battery}` : '—')
@@ -1209,7 +1365,7 @@ struct Index {
                 .alignItems(VerticalAlign.Bottom)
                 .margin({ top: 9 })
                 Text(`可用 ${this.usableKwh()}`)
-                  .fontSize(11)
+                  .fontSize(12)
                   .fontColor($r('app.color.app_tertiary_text'))
                   .margin({ top: 7 })
               }
@@ -1218,7 +1374,7 @@ struct Index {
 
               Column({ space: 0 }) {
                 Text('预计续航')
-                  .fontSize(9.5)
+                  .fontSize(12)
                   .fontColor($r('app.color.app_tertiary_text'))
                 Row({ space: 2 }) {
                   Text(this.range >= 0 ? `${this.range}` : '—')
@@ -1232,7 +1388,7 @@ struct Index {
                 .alignItems(VerticalAlign.Bottom)
                 .margin({ top: 9 })
                 Text(`满电估算 ${this.fullRangeKm()}`)
-                  .fontSize(11)
+                  .fontSize(12)
                   .fontColor($r('app.color.app_tertiary_text'))
                   .margin({ top: 7 })
               }
@@ -1244,6 +1400,7 @@ struct Index {
             .width('100%')
             .padding({ top: 16, bottom: 15 })
             .border({ width: { top: 1, bottom: 1 }, color: $r('app.color.app_rule') })
+            .margin({ top: 16 })
 
             // ---------- 最后停车位置 ----------
             StateRow({
@@ -1256,7 +1413,7 @@ struct Index {
                 this.openParkedMap();
               }
             })
-            .margin({ bottom: 10 })
+            .margin({ top: 8, bottom: 10 })
           }
           .width('100%')
           .padding({ left: 18, right: 18 })

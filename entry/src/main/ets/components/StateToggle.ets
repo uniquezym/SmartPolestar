@@ -143,7 +143,7 @@ export struct StateToggle {
 
       // 状态标签
       Text(this.stateText())
-        .fontSize(9)
+        .fontSize(12)
         .fontColor(this.phase === TogglePhase.OFF
           ? $r('app.color.app_tertiary_text')
           : $r('app.color.app_accent_text'))
