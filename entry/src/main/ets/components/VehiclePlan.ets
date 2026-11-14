@@ -34,8 +34,6 @@ class PlanMarker {
  */
 @Component
 export struct VehiclePlan {
-  /** 车锁已解锁 —— 整车标记点显示警示色。 */
-  @Prop unlocked: boolean = false;
   /** 机盖开启 —— 机盖标记点显示警示色。 */
   @Prop hoodOpen: boolean = false;
   /** 充电口开启 —— 充电口标记点显示警示色。 */
@@ -44,8 +42,18 @@ export struct VehiclePlan {
   @Prop trunkUnlocked: boolean = false;
   /** 尾门指令执行中 —— 标记点显示蓝色描边与旋转指示器。 */
   @Prop trunkBusy: boolean = false;
-  /** 车窗开启 —— 四窗区域染警示色。 */
-  @Prop windowOpen: boolean = false;
+  /**
+   * 四扇车窗状态，顺序：0=左前 1=右前 2=左后 3=右后。
+   *
+   * 值 1 或 3 视为开启，对应原版 g10.m1311b 的判定。
+   */
+  @Prop windowStates: number[] = [];
+  /**
+   * 四个车门状态，顺序：0=左前 1=右前 2=左后 3=右后。
+   *
+   * 值 1 或 3 视为开启，对应原版 g10.onDraw 的车门图示判定。
+   */
+  @Prop doorStates: number[] = [];
   /** 点击尾门（解锁 / 锁定切换）。 */
   onTrunkTap?: () => void;
 
@@ -90,6 +98,40 @@ export struct VehiclePlan {
    */
   private sw(value: number): number {
     return value / this.density;
+  }
+
+  /**
+   * 判断某个部件是否处于开启态。
+   *
+   * 协议中 1 与 3 都表示「未关闭」，与原版 g10 的判定一致。
+   */
+  private isOpen(states: number[], index: number): boolean {
+    if (index < 0 || index >= states.length) {
+      return false;
+    }
+    const value = states[index];
+    return value === 1 || value === 3;
+  }
+
+  /**
+   * 开启的车门图示路径。
+   *
+   * 车门绕铰链向车身外侧展开，画成一块外凸的四边形门板：
+   * 近边贴车身侧面（x=39 / x=161），远边向外偏移到 x=21 / x=179，
+   * 并沿车身方向错开 10 —— 前门向后错、后门向前错，形成开门透视。
+   * 坐标为 200×340 设计稿坐标系。
+   */
+  private doorPath(index: number): string {
+    switch (index) {
+      case 0: // 左前门
+        return 'M39,100 L39,158 L21,168 L21,110 Z';
+      case 1: // 右前门
+        return 'M161,100 L161,158 L179,168 L179,110 Z';
+      case 2: // 左后门
+        return 'M39,164 L39,222 L21,212 L21,154 Z';
+      default: // 右后门
+        return 'M161,164 L161,222 L179,212 L179,154 Z';
+    }
   }
 
   /**
@@ -142,35 +184,73 @@ export struct VehiclePlan {
           .width(`${this.viewW}px`)
           .height(`${this.viewH}px`)
 
-        // 四窗：开启时染警示色。框线与车身外框同粗
+        // 四窗：逐扇独立染色，开启时染警示色。框线与车身外框同粗
         Path({ commands: 'M45,96 L98,96 L98,158 L45,158 Z' })
-          .fill(this.windowOpen ? $r('app.color.app_warn_soft') : Color.Transparent)
+          .fill(this.isOpen(this.windowStates, 0) ? $r('app.color.app_warn_soft') : Color.Transparent)
           .stroke($r('app.color.app_primary_text'))
           .strokeWidth(this.sw(1.6))
           .strokeLineJoin(LineJoinStyle.Round)
           .width(`${this.viewW}px`)
           .height(`${this.viewH}px`)
         Path({ commands: 'M102,96 L155,96 L155,158 L102,158 Z' })
-          .fill(this.windowOpen ? $r('app.color.app_warn_soft') : Color.Transparent)
+          .fill(this.isOpen(this.windowStates, 1) ? $r('app.color.app_warn_soft') : Color.Transparent)
           .stroke($r('app.color.app_primary_text'))
           .strokeWidth(this.sw(1.6))
           .strokeLineJoin(LineJoinStyle.Round)
           .width(`${this.viewW}px`)
           .height(`${this.viewH}px`)
         Path({ commands: 'M45,162 L98,162 L98,224 L45,224 Z' })
-          .fill(this.windowOpen ? $r('app.color.app_warn_soft') : Color.Transparent)
+          .fill(this.isOpen(this.windowStates, 2) ? $r('app.color.app_warn_soft') : Color.Transparent)
           .stroke($r('app.color.app_primary_text'))
           .strokeWidth(this.sw(1.6))
           .strokeLineJoin(LineJoinStyle.Round)
           .width(`${this.viewW}px`)
           .height(`${this.viewH}px`)
         Path({ commands: 'M102,162 L155,162 L155,224 L102,224 Z' })
-          .fill(this.windowOpen ? $r('app.color.app_warn_soft') : Color.Transparent)
+          .fill(this.isOpen(this.windowStates, 3) ? $r('app.color.app_warn_soft') : Color.Transparent)
           .stroke($r('app.color.app_primary_text'))
           .strokeWidth(this.sw(1.6))
           .strokeLineJoin(LineJoinStyle.Round)
           .width(`${this.viewW}px`)
           .height(`${this.viewH}px`)
+
+        // 开启的车门：向外展开的门板，用沃尔沃主题蓝
+        if (this.isOpen(this.doorStates, 0)) {
+          Path({ commands: this.doorPath(0) })
+            .fill($r('app.color.app_accent_soft'))
+            .stroke($r('app.color.app_accent'))
+            .strokeWidth(this.sw(1.4))
+            .strokeLineJoin(LineJoinStyle.Round)
+            .width(`${this.viewW}px`)
+            .height(`${this.viewH}px`)
+        }
+        if (this.isOpen(this.doorStates, 1)) {
+          Path({ commands: this.doorPath(1) })
+            .fill($r('app.color.app_accent_soft'))
+            .stroke($r('app.color.app_accent'))
+            .strokeWidth(this.sw(1.4))
+            .strokeLineJoin(LineJoinStyle.Round)
+            .width(`${this.viewW}px`)
+            .height(`${this.viewH}px`)
+        }
+        if (this.isOpen(this.doorStates, 2)) {
+          Path({ commands: this.doorPath(2) })
+            .fill($r('app.color.app_accent_soft'))
+            .stroke($r('app.color.app_accent'))
+            .strokeWidth(this.sw(1.4))
+            .strokeLineJoin(LineJoinStyle.Round)
+            .width(`${this.viewW}px`)
+            .height(`${this.viewH}px`)
+        }
+        if (this.isOpen(this.doorStates, 3)) {
+          Path({ commands: this.doorPath(3) })
+            .fill($r('app.color.app_accent_soft'))
+            .stroke($r('app.color.app_accent'))
+            .strokeWidth(this.sw(1.4))
+            .strokeLineJoin(LineJoinStyle.Round)
+            .width(`${this.viewW}px`)
+            .height(`${this.viewH}px`)
+        }
 
         // 内部分隔线
         Path({ commands: 'M45 54h110M61 84h78M39 98h122M61 234h78M39 254h122' })
@@ -211,10 +291,6 @@ export struct VehiclePlan {
       // ---------- 位置标记点（vp 坐标，与缩放后的车模对齐） ----------
       this.marker(new PlanMarker(100, 22, '盖', this.hoodOpen))
       this.marker(new PlanMarker(52, 238, '口', this.portOpen))
-      this.marker(new PlanMarker(61, 108, '前左', this.unlocked))
-      this.marker(new PlanMarker(139, 108, '前右', this.unlocked))
-      this.marker(new PlanMarker(61, 186, '后左', this.unlocked))
-      this.marker(new PlanMarker(139, 186, '后右', this.unlocked))
 
       // 尾门标记点：可点击，解锁后走警示色，执行中显示蓝色描边与转圈
       Stack({ alignContent: Alignment.Center }) {

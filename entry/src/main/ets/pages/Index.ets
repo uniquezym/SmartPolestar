@@ -96,6 +96,18 @@ struct Index {
   @State hoodOpen: boolean = false;
   /** 充电口开启 —— 车模标记点显示警示色。 */
   @State portOpen: boolean = false;
+  /**
+   * 四扇车窗状态，顺序：0=左前 1=右前 2=左后 3=右后。
+   *
+   * 车模逐扇染色，值 1 或 3 视为开启。
+   */
+  @State windowStates: number[] = [];
+  /**
+   * 四个车门状态，顺序：0=左前 1=右前 2=左后 3=右后。
+   *
+   * 车模逐扇绘制展开门板，值 1 或 3 视为开启。
+   */
+  @State doorStates: number[] = [];
 
   /** 里程口径：0=总里程 1=手动小计 2=自动小计。 */
   @State mileageMode: number = 0;
@@ -493,6 +505,10 @@ struct Index {
     }
     this.hoodOpen = state.hoodState === 1 || state.hoodState === 3;
     this.portOpen = state.chargePortState === 1 || state.chargePortState === 3;
+
+    // 车模门窗：逐扇独立染色 / 绘制展开门板
+    this.windowStates = state.windowStates;
+    this.doorStates = state.doorStates;
   }
 
   /**
@@ -801,6 +817,8 @@ struct Index {
       } else if (state.tailgateLock === '已锁') {
         this.trunkUnlocked = false;
       }
+      this.windowStates = state.windowStates;
+      this.doorStates = state.doorStates;
     } catch (err) {
       Log.warn(`同步尾门锁状态失败: ${(err as Error).message}`);
     }
@@ -848,6 +866,9 @@ struct Index {
     } else if (state.tailgateLock === '已锁') {
       this.trunkUnlocked = false;
     }
+    // 车窗开合后逐扇状态会变，同步到车模
+    this.windowStates = state.windowStates;
+    this.doorStates = state.doorStates;
     if (kind === ToggleKind.LOCK) {
       if (state.locked === '未锁') {
         return TogglePhase.ON;
@@ -1107,8 +1128,8 @@ struct Index {
             // ---------- 车辆图示 + 右侧快捷开关 ----------
             Row({ space: 10 }) {
               VehiclePlan({
-                unlocked: this.lockPhase === TogglePhase.ON,
-                windowOpen: this.windowPhase === TogglePhase.ON,
+                windowStates: this.windowStates,
+                doorStates: this.doorStates,
                 hoodOpen: this.hoodOpen,
                 portOpen: this.portOpen,
                 trunkUnlocked: this.trunkUnlocked,
