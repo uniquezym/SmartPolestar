@@ -62,6 +62,8 @@ export struct VehiclePlan {
 
   /**
    * 标记点：常态中性，开启态走警示色。
+   *
+   * 位置按车模缩放后的坐标系对齐。
    */
   @Builder
   marker(marker: PlanMarker) {
@@ -77,7 +79,10 @@ export struct VehiclePlan {
     .border({ width: 1.2, color: marker.warn
       ? $r('app.color.app_warn')
       : $r('app.color.app_card_border') })
-    .position({ x: marker.x - 13, y: marker.y - 13 })
+    .position({
+      x: marker.x - 13,
+      y: marker.y - 13
+    })
   }
 
   /**

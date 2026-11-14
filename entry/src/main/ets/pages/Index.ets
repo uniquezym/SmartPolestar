@@ -6,7 +6,6 @@ import { VehicleState } from '../core/model/VehicleState';
 import { AppIcon, AppIconName } from '../components/Icons';
 import { StateToggle, ToggleKind, TogglePhase } from '../components/StateToggle';
 import { VehiclePlan } from '../components/VehiclePlan';
-import { ChargingCard } from '../components/ChargingCard';
 import { StateRow } from '../components/StateRow';
 import { Control } from './Control';
 import { Detail } from './Detail';
@@ -762,6 +761,11 @@ struct Index {
           continue;
         }
         this.setPhase(kind, target);
+        // 整车解锁会连带解锁尾门，但车端两个状态不一定同时推送，
+        // 落定后再读一次 exterior 把尾门锁状态补齐。
+        if (kind === ToggleKind.LOCK) {
+          this.syncTrunkLock();
+        }
         this.toast(`${this.toggleLabel(kind)}已${target === TogglePhase.ON ? '开启' : '关闭'}`);
         return;
       } catch (err) {
@@ -773,7 +777,33 @@ struct Index {
     // 超时未确认：按目标状态落定（指令已成功下发）
     Log.warn(`车控状态未在 ${budgetMs}ms 内确认，按下发结果落定: ${action}`);
     this.setPhase(kind, target);
+    if (kind === ToggleKind.LOCK) {
+      this.syncTrunkLock();
+    }
     this.toast(`${this.toggleLabel(kind)}指令已发送`);
+  }
+
+  /**
+   * 单独读一次 exterior，把尾门锁状态同步到车模标记点。
+   *
+   * 整车解锁 / 锁定会连带改变尾门锁，但车端不一定同时推送两个状态，
+   * 需要额外读一次才能拿到准确的尾门锁状态。
+   */
+  private async syncTrunkLock(): Promise<void> {
+    const repository = this.repository;
+    if (repository === undefined) {
+      return;
+    }
+    try {
+      const state = await repository.readDomain('exterior', this.vin);
+      if (state.tailgateLock === '未锁') {
+        this.trunkUnlocked = true;
+      } else if (state.tailgateLock === '已锁') {
+        this.trunkUnlocked = false;
+      }
+    } catch (err) {
+      Log.warn(`同步尾门锁状态失败: ${(err as Error).message}`);
+    }
   }
 
   /**
@@ -811,6 +841,13 @@ struct Index {
     }
 
     const state = await repository.readDomain('exterior', this.vin);
+    // 整车解锁 / 锁定会连带改变尾门锁状态，同步到车模的尾门标记点。
+    // 尾门锁与车锁同在 exterior 域，一次读取即可拿到。
+    if (state.tailgateLock === '未锁') {
+      this.trunkUnlocked = true;
+    } else if (state.tailgateLock === '已锁') {
+      this.trunkUnlocked = false;
+    }
     if (kind === ToggleKind.LOCK) {
       if (state.locked === '未锁') {
         return TogglePhase.ON;
@@ -1187,20 +1224,6 @@ struct Index {
             .padding({ top: 16, bottom: 15 })
             .border({ width: { top: 1, bottom: 1 }, color: $r('app.color.app_rule') })
 
-            // ---------- 充电：仅插枪时出现 ----------
-            if (this.chargingConnected()) {
-              this.sectionLabel('充电')
-
-              ChargingCard({
-                statusText: this.charging,
-                live: this.charging === '充电中' || this.charging === '智能充电',
-                powerWatts: this.powerWatts,
-                chargerType: this.chargingType === '未知' ? '' : this.chargingType,
-                currentAmps: this.currentAmps,
-                remainingMinutes: this.remainingMinutes
-              })
-            }
-
             // ---------- 最后停车位置 ----------
             StateRow({
               icon: AppIconName.LOCATION,
@@ -1212,7 +1235,7 @@ struct Index {
                 this.openParkedMap();
               }
             })
-            .margin({ bottom: 24 })
+            .margin({ bottom: 10 })
           }
           .width('100%')
           .padding({ left: 18, right: 18 })

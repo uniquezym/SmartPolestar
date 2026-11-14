@@ -104,7 +104,10 @@ export class VehicleCommands {
         break;
 
       case VehicleCommands.ACTION_UNLOCK:
-        writer.writeVarintField(2, 3);
+        // 整车解锁：不带 field 2。
+        // 还原自 ga0.m1414h 的 case 3 —— 原版只有 unlock-trunk 才追加
+        // field 2 = 1。写了未知枚举值服务端会报
+        // "Can't get the number of an unknown enum value"。
         rpcMethod = 'Unlock';
         break;
 
@@ -133,6 +136,8 @@ export class VehicleCommands {
 
       case VehicleCommands.ACTION_CLIMATE_START:
         // 目标温度固定 22.0f（field 3, fixed32）
+        // 还原自 ga0.m1414h 的 case 8：先写 field 2 = 1，再写 field 3。
+        writer.writeVarintField(2, 1);
         writer.writeFixed32Field(3, VehicleCommands.CLIMATE_TARGET_TEMPERATURE);
         rpcMethod = 'ClimatizationStart';
         break;
