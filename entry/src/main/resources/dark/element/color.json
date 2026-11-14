@@ -2,7 +2,127 @@
   "color": [
     {
       "name": "start_window_background",
-      "value": "#000000"
+      "value": "#0E0F10"
+    },
+    {
+      "name": "app_background",
+      "value": "#0E0F10"
+    },
+    {
+      "name": "app_surface",
+      "value": "#17191B"
+    },
+    {
+      "name": "app_surface_muted",
+      "value": "#1E2123"
+    },
+    {
+      "name": "app_surface_sunken",
+      "value": "#26292B"
+    },
+    {
+      "name": "app_card_background",
+      "value": "#17191B"
+    },
+    {
+      "name": "app_primary_text",
+      "value": "#EDEEEA"
+    },
+    {
+      "name": "app_secondary_text",
+      "value": "#9EA19E"
+    },
+    {
+      "name": "app_tertiary_text",
+      "value": "#6E716E"
+    },
+    {
+      "name": "app_rule",
+      "value": "#25282A"
+    },
+    {
+      "name": "app_divider",
+      "value": "#25282A"
+    },
+    {
+      "name": "app_card_border",
+      "value": "#33373A"
+    },
+    {
+      "name": "app_accent",
+      "value": "#6FA8DC"
+    },
+    {
+      "name": "app_accent_soft",
+      "value": "#16242F"
+    },
+    {
+      "name": "app_on_accent",
+      "value": "#0E0F10"
+    },
+    {
+      "name": "app_accent_text",
+      "value": "#9AC4E8"
+    },
+    {
+      "name": "app_accent_soft_bg",
+      "value": "#16242F"
+    },
+    {
+      "name": "app_polar",
+      "value": "#FF8B2B"
+    },
+    {
+      "name": "app_warn",
+      "value": "#E0A458"
+    },
+    {
+      "name": "app_warn_soft",
+      "value": "#2C2113"
+    },
+    {
+      "name": "app_ok",
+      "value": "#6FBF8F"
+    },
+    {
+      "name": "app_ok_soft",
+      "value": "#16261D"
+    },
+    {
+      "name": "app_error",
+      "value": "#E08279"
+    },
+    {
+      "name": "app_error_soft",
+      "value": "#2E1917"
+    },
+    {
+      "name": "app_health_ok",
+      "value": "#6FBF8F"
+    },
+    {
+      "name": "app_health_warn",
+      "value": "#E0A458"
+    },
+    {
+      "name": "app_health_error",
+      "value": "#E08279"
+    },
+    {
+      "name": "app_progress_track",
+      "value": "#26292B"
+    },
+    {
+      "name": "app_charge_accent",
+      "value": "#6FA8DC"
+    },
+    {
+      "name": "app_charge_text",
+      "value": "#9EA19E"
+    },
+    {
+      "name": "app_state_unlocked",
+      "value": "#E0A458"
     }
   ]
 }

@@ -123,6 +123,10 @@
     {
       "name": "permission_bluetooth_reason",
       "value": "需要扫描车辆蓝牙信号以实现靠近与离开的自动车控"
+    },
+    {
+      "name": "permission_location_reason",
+      "value": "需要将车辆停放坐标解析为地址名称"
     }
   ]
 }

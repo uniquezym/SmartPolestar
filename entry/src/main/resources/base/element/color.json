@@ -2,55 +2,127 @@
   "color": [
     {
       "name": "start_window_background",
-      "value": "#F7F7F5"
-    },
-    {
-      "name": "app_primary_text",
-      "value": "#181918"
-    },
-    {
-      "name": "app_secondary_text",
-      "value": "#6E706C"
+      "value": "#F2F1ED"
     },
     {
       "name": "app_background",
-      "value": "#F7F7F5"
+      "value": "#F2F1ED"
     },
     {
-      "name": "app_accent",
-      "value": "#FF7A00"
+      "name": "app_surface",
+      "value": "#FFFFFF"
     },
     {
-      "name": "app_accent_soft",
-      "value": "#EBECE8"
+      "name": "app_surface_muted",
+      "value": "#E7E6E0"
+    },
+    {
+      "name": "app_surface_sunken",
+      "value": "#DEDDD6"
     },
     {
       "name": "app_card_background",
-      "value": "#F5F5F3"
+      "value": "#FFFFFF"
     },
     {
-      "name": "app_card_border",
-      "value": "#DCDDD8"
+      "name": "app_primary_text",
+      "value": "#17181A"
+    },
+    {
+      "name": "app_secondary_text",
+      "value": "#5A5D61"
+    },
+    {
+      "name": "app_tertiary_text",
+      "value": "#8C8F93"
+    },
+    {
+      "name": "app_rule",
+      "value": "#D5D4CD"
     },
     {
       "name": "app_divider",
-      "value": "#E5E6E2"
+      "value": "#D5D4CD"
+    },
+    {
+      "name": "app_card_border",
+      "value": "#D5D4CD"
+    },
+    {
+      "name": "app_accent",
+      "value": "#003057"
+    },
+    {
+      "name": "app_accent_soft",
+      "value": "#DFE7ED"
     },
     {
       "name": "app_on_accent",
       "value": "#FFFFFF"
     },
     {
-      "name": "app_health_ok",
-      "value": "#2E7D32"
+      "name": "app_accent_text",
+      "value": "#003057"
     },
     {
-      "name": "app_health_warn",
+      "name": "app_accent_soft_bg",
+      "value": "#DFE7ED"
+    },
+    {
+      "name": "app_polar",
       "value": "#FF7A00"
     },
     {
+      "name": "app_warn",
+      "value": "#9A5609"
+    },
+    {
+      "name": "app_warn_soft",
+      "value": "#F6E9D6"
+    },
+    {
+      "name": "app_ok",
+      "value": "#1D6B45"
+    },
+    {
+      "name": "app_ok_soft",
+      "value": "#DFEBE2"
+    },
+    {
+      "name": "app_error",
+      "value": "#9E2B22"
+    },
+    {
+      "name": "app_error_soft",
+      "value": "#F5E1DF"
+    },
+    {
+      "name": "app_health_ok",
+      "value": "#1D6B45"
+    },
+    {
+      "name": "app_health_warn",
+      "value": "#9A5609"
+    },
+    {
       "name": "app_health_error",
-      "value": "#C62828"
+      "value": "#9E2B22"
+    },
+    {
+      "name": "app_progress_track",
+      "value": "#DEDDD6"
+    },
+    {
+      "name": "app_charge_accent",
+      "value": "#003057"
+    },
+    {
+      "name": "app_charge_text",
+      "value": "#5A5D61"
+    },
+    {
+      "name": "app_state_unlocked",
+      "value": "#9A5609"
     }
   ]
 }

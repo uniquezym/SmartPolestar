@@ -153,6 +153,32 @@ export class VehicleRepository {
   }
 
   /**
+   * 读取单个状态域。用于车控指令下发后的生效确认（避免轮询全量状态）。
+   *
+   * 对应 Android 端 m1411d0 的分支：按动作前缀只读相关的那一个域。
+   *
+   * @param domain 'exterior' | 'climate' | 'air'
+   * @param vin    车辆 VIN
+   */
+  async readDomain(domain: string, vin: string): Promise<VehicleState> {
+    const client = await this.prepare();
+    const state = new VehicleState();
+    state.vin = vin;
+    switch (domain) {
+      case 'climate':
+        await VehicleStateReader.readClimate(client, vin, state);
+        break;
+      case 'air':
+        await VehicleStateReader.readAir(client, vin, state);
+        break;
+      default:
+        await VehicleStateReader.readExterior(client, vin, state);
+        break;
+    }
+    return state;
+  }
+
+  /**
    * 读取全部车辆状态。
    */
   async readAllStates(): Promise<VehicleState[]> {

@@ -2,8 +2,8 @@ import { GrpcClient } from './grpc/GrpcClient';
 import { ProtoReader, ProtoValue } from '../proto/ProtoReader';
 import {
   VehicleState, CHARGING_LABELS, CHARGER_CONNECTION_LABELS, CHARGING_TYPE_LABELS,
-  CHARGER_POWER_LABELS, CLIMATE_LABELS, LOCK_LABELS, TAILGATE_LABELS, AIR_LABELS,
-  MAINTENANCE_LABELS
+  CHARGER_POWER_LABELS, CLIMATE_LABELS, CLIMATE_RUN_MODE_LABELS, LOCK_LABELS,
+  TAILGATE_LABELS, AIR_LABELS, MAINTENANCE_LABELS
 } from '../model/VehicleState';
 import { Log } from '../../common/Log';
 
@@ -88,8 +88,8 @@ export class VehicleStateReader {
     state.tailgateLock = VehicleState.enumLabel(
       ProtoValue.asInteger(ProtoValue.get(fields, 16)), LOCK_LABELS);
     // 机盖与充电口状态。还原自 ga0.m1406U：f1760J <- field 11，f1761K <- field 13。
-    state.hoodState = String(ProtoValue.asInteger(ProtoValue.get(fields, 11)) ?? -1);
-    state.chargePortState = String(ProtoValue.asInteger(ProtoValue.get(fields, 13)) ?? -1);
+    state.hoodState = ProtoValue.asInteger(ProtoValue.get(fields, 11)) ?? -1;
+    state.chargePortState = ProtoValue.asInteger(ProtoValue.get(fields, 13)) ?? -1;
 
     // 车门状态取 field 3..6，车窗状态取 field 7..10。
     // 还原自 ga0.m1406U：f1758H <- field 3..6，f1759I <- field 7..10。
@@ -115,8 +115,11 @@ export class VehicleStateReader {
 
     state.climate = VehicleState.enumLabel(ProtoValue.asInteger(ProtoValue.get(fields, 2)), CLIMATE_LABELS);
     state.climateRuntimeMinutes = ProtoValue.asInteger(ProtoValue.get(fields, 3));
-    state.climateVentilationMode = VehicleState.enumLabel(
-      ProtoValue.asInteger(ProtoValue.get(fields, 6)), ['未知', '内循环', '外循环']);
+    // field 6 是运行模式，不是循环模式。原版只用它选图标：
+    // 1 → ic_climate_cool（雪花）、2 → ic_climate_heat（热气）、其余 → ic_climate_airflow（气流）。
+    // 早期版本误映射为「内循环 / 外循环」，原版代码中不存在该语义，已更正。
+    state.climateRunMode = VehicleState.enumLabel(
+      ProtoValue.asInteger(ProtoValue.get(fields, 6)), CLIMATE_RUN_MODE_LABELS);
     state.climateTemperatureC = ProtoValue.asFiniteDouble(ProtoValue.get(fields, 7));
     state.climateTargetTemperatureC = ProtoValue.asFiniteDouble(ProtoValue.get(fields, 8));
     state.climateStateAt = Date.now();
@@ -191,6 +194,11 @@ export class VehicleStateReader {
 
   /**
    * 读取最后停车位置（走 LBS 主机）。对应 ga0 的 dtlinternet 分支。
+   *
+   * 还原自 ga0.m1407V，字段结构：
+   *   请求：field 1 = VIN（m1389s0(vin, 1)，注意与 vehiclestates 的 field 2 不同）
+   *   响应：field 2 = 位置消息 { field 1 = 纬度, field 2 = 经度, field 3 = 时间戳消息 { field 1 = 时间戳 } }
+   *         field 3 = stale 标志（非 0 表示数据陈旧）
    */
   static async readParkedLocation(client: GrpcClient, vin: string, state: VehicleState): Promise<void> {
     const vinBytes = GrpcClient.utf8(vin);
@@ -201,24 +209,44 @@ export class VehicleStateReader {
 
     const response = await client.call(
       GrpcClient.SERVICE_DTL_INTERNET, 'GetLastParkedLocation', vin, payload, 12000, true);
-    // dtlinternet 的响应外层是 field 2（还原自 ga0.m1407V 的 m1349F(map, 2)）。
-    const fields = VehicleStateReader.unwrap(response, 2);
 
-    const latitude = ProtoValue.asFiniteDouble(ProtoValue.get(fields, 1));
-    const longitude = ProtoValue.asFiniteDouble(ProtoValue.get(fields, 2));
-    if (latitude !== undefined && longitude !== undefined &&
-      latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180) {
-      state.parkedLatitude = latitude;
-      state.parkedLongitude = longitude;
+    // 顶层：field 2 是位置消息，field 3 是 stale 标志。
+    const outer = new ProtoReader(response).decode();
+    const locationBytes = ProtoValue.get(outer, 2);
+    if (!(locationBytes instanceof Uint8Array)) {
+      Log.warn('最后停车位置响应缺少 field 2');
+      return;
     }
-    const timestamp = ProtoValue.get(fields, 3);
-    if (typeof timestamp === 'number') {
-      state.parkedTimestamp = timestamp;
+    const location = new ProtoReader(locationBytes).decode();
+
+    // 还原自 ga0.m1407V：
+    //   latitude  = field 2（f1786e0）
+    //   longitude = field 1（f1788f0）
+    // 注意与直觉相反 —— field 1 是经度，field 2 才是纬度。
+    const longitude = ProtoValue.asFiniteNumber(ProtoValue.get(location, 1));
+    const latitude = ProtoValue.asFiniteNumber(ProtoValue.get(location, 2));
+    if (latitude === undefined || longitude === undefined ||
+      latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+      Log.warn(`最后停车位置响应中没有有效坐标: lat=${latitude} lon=${longitude}`);
+      return;
     }
-    const odometer = ProtoValue.asFiniteDouble(ProtoValue.get(fields, 4));
-    if (odometer !== undefined) {
-      state.parkedLocationOdometerKm = odometer;
+    state.parkedLatitude = latitude;
+    state.parkedLongitude = longitude;
+
+    // field 3 是嵌套消息，其 field 1 为停车时间戳。
+    const timeBytes = ProtoValue.get(location, 3);
+    if (timeBytes instanceof Uint8Array) {
+      const timeFields = new ProtoReader(timeBytes).decode();
+      const timestamp = ProtoValue.get(timeFields, 1);
+      if (typeof timestamp === 'number') {
+        state.parkedTimestamp = timestamp;
+      }
     }
+
+    // 顶层 field 3 非 0 表示数据陈旧（stale）。
+    const stale = ProtoValue.get(outer, 3);
+    state.parkedLocationStale = typeof stale === 'number' && stale !== 0;
+
     state.parkedLocationStateAt = Date.now();
   }
 
@@ -289,12 +317,14 @@ export class VehicleStateReader {
    */
   static async readAll(client: GrpcClient, vin: string, state: VehicleState): Promise<void> {
     const tasks: StateReadTask[] = [
+      { name: 'carinfo', run: () => VehicleStateReader.readCarInfo(client, vin, state) },
       { name: 'battery', run: () => VehicleStateReader.readBattery(client, vin, state) },
       { name: 'exterior', run: () => VehicleStateReader.readExterior(client, vin, state) },
       { name: 'climate', run: () => VehicleStateReader.readClimate(client, vin, state) },
       { name: 'air', run: () => VehicleStateReader.readAir(client, vin, state) },
       { name: 'odometer', run: () => VehicleStateReader.readOdometer(client, vin, state) },
-      { name: 'health', run: () => VehicleStateReader.readHealth(client, vin, state) }
+      { name: 'health', run: () => VehicleStateReader.readHealth(client, vin, state) },
+      { name: 'parkedlocation', run: () => VehicleStateReader.readParkedLocation(client, vin, state) }
     ];
 
     for (const task of tasks) {

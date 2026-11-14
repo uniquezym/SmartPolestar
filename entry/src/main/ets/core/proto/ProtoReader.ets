@@ -241,6 +241,31 @@ export class ProtoValue {
   }
 
   /**
+   * 读取浮点数，兼容 4 字节 float 与 8 字节 double。
+   *
+   * 还原自 m1372i：既接受 wire type 1（8 字节 double），
+   * 也接受 wire type 5（4 字节 float）。经纬度就是用 float 编码的，
+   * 只认 8 字节会把它们全部读成 NaN。
+   */
+  static asFiniteNumber(value: number | Uint8Array | undefined): number | undefined {
+    if (typeof value === 'number') {
+      return Number.isFinite(value) ? value : undefined;
+    }
+    if (value instanceof Uint8Array) {
+      let d = NaN;
+      if (value.length === 8) {
+        d = new DataView(value.buffer, value.byteOffset, 8).getFloat64(0, true);
+      } else if (value.length === 4) {
+        d = new DataView(value.buffer, value.byteOffset, 4).getFloat32(0, true);
+      }
+      if (!Number.isNaN(d) && Number.isFinite(d)) {
+        return d;
+      }
+    }
+    return undefined;
+  }
+
+  /**
    * 读取非负浮点数，负值返回 undefined。还原自 m1350G。
    */
   static asNonNegative(value: number | Uint8Array | undefined): number | undefined {

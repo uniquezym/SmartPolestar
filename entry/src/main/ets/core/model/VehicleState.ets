@@ -40,7 +40,8 @@ export class VehicleState {
   // ---- 驻车空调 ----
   climate: string = '未知';
   climateRuntimeMinutes: number | undefined = undefined;
-  climateVentilationMode: string = '未知';
+  /** 空调运行模式。field 6：1=制冷 2=制热 其余=送风。对应原版状态卡图标选择。 */
+  climateRunMode: string = '未知';
   climateTemperatureC: number | undefined = undefined;
   climateTargetTemperatureC: number | undefined = undefined;
 
@@ -51,8 +52,10 @@ export class VehicleState {
   windows: string = '车窗状态未知';
   tailgate: string = '未知';
   tailgateLock: string = '';
-  hoodState: string = '';
-  chargePortState: string = '';
+  /** 机盖状态。field 11：1 或 3 视为开启（判定对齐原版 g10）。 */
+  hoodState: number = -1;
+  /** 充电口状态。field 13：1 或 3 视为开启。 */
+  chargePortState: number = -1;
 
   // ---- 空气净化 ----
   air: string = '未知';
@@ -152,6 +155,16 @@ export const CHARGER_POWER_LABELS: string[] = ['未知', '无电源', '初始化
 export const CLIMATE_LABELS: string[] = ['未知', '开启', '关闭', '处理中'];
 
 /**
+ * 驻车空调运行模式。对应 Android 端 m1358R 取 field 6。
+ *
+ * 原版只用该字段选择状态卡图标，不作为文字显示：
+ *   1 → ic_climate_cool（雪花）  2 → ic_climate_heat（上升热气）  其余 → ic_climate_airflow（气流）
+ *
+ * 注意：原版不存在「内循环 / 外循环」这一语义，早期版本误映射为此，已更正。
+ */
+export const CLIMATE_RUN_MODE_LABELS: string[] = ['送风', '制冷', '制热'];
+
+/**
  * 车锁状态。对应 Android 端外饰读取分支。
  */
 export const LOCK_LABELS: string[] = ['未知', '未锁', '已锁'];
@@ -159,12 +172,12 @@ export const LOCK_LABELS: string[] = ['未知', '未锁', '已锁'];
 /**
  * 尾门状态。对应 Android 端外饰读取分支。
  */
-export const TAILGATE_LABELS: string[] = ['已打开', '已关闭', '未关严'];
+export const TAILGATE_LABELS: string[] = ['未知', '已打开', '已关闭', '未关严'];
 
 /**
- * 空气净化状态。对应 Android 端 m1357O。
+ * 空气净化状态。对应 Android 端 m1357O 的内联数组。
  */
-export const AIR_LABELS: string[] = ['未知', '开启', '关闭'];
+export const AIR_LABELS: string[] = ['未知', '开启', '关闭', '处理中'];
 
 /**
  * 车辆健康状态。对应 Android 端 health 分支。

@@ -20,6 +20,9 @@ export class SessionStore {
   /** 续期失败后的重试时刻。 */
   static readonly KEY_REFRESH_RETRY_AFTER: string = 'refresh_retry_after';
 
+  /** 上次成功刷新车辆状态的时刻（epoch millis）。对应 Android 端的 "last_refresh_at"。 */
+  static readonly KEY_LAST_REFRESH_AT: string = 'last_refresh_at';
+
   private static store: preferences.Preferences | undefined = undefined;
 
   /**
@@ -102,6 +105,23 @@ export class SessionStore {
   static async clearRefreshRetryAfter(context: common.UIAbilityContext): Promise<void> {
     const store = await SessionStore.open(context);
     await store.delete(SessionStore.KEY_REFRESH_RETRY_AFTER);
+    await store.flush();
+  }
+
+  /**
+   * 读取上次成功刷新车辆状态的时刻。
+   */
+  static async getLastRefreshAt(context: common.UIAbilityContext): Promise<number> {
+    const store = await SessionStore.open(context);
+    return await store.get(SessionStore.KEY_LAST_REFRESH_AT, 0) as number;
+  }
+
+  /**
+   * 写入上次成功刷新车辆状态的时刻。
+   */
+  static async setLastRefreshAt(context: common.UIAbilityContext, timestamp: number): Promise<void> {
+    const store = await SessionStore.open(context);
+    await store.put(SessionStore.KEY_LAST_REFRESH_AT, timestamp);
     await store.flush();
   }
 
