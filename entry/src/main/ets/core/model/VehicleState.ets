@@ -155,6 +155,32 @@ export const CHARGING_TYPE_LABELS: string[] = ['未知', '未充电', '交流', 
 export const CHARGER_POWER_LABELS: string[] = ['未知', '无电源', '初始化中', '可用', '正在供电', '故障'];
 
 /**
+ * 统一的充电阶段。
+ *
+ * 协议里有两组独立的状态：充电枪连接状态（chargerConnection）与
+ * 充电状态（charging）。两者组合起来才是用户真正关心的一句话，
+ * 因此在这里归一成单一阶段，UI 只认这个枚举。
+ *
+ * 判定优先级见 Index.chargeStage()。
+ */
+export enum ChargeStage {
+  /** 未充电：没插枪，也没有充电在进行。 */
+  IDLE = 'idle',
+  /** 已插枪但未开始充电（计划中 / 空闲）。 */
+  PLUGGED = 'plugged',
+  /** 正在充电（充电中 / 智能充电）。 */
+  CHARGING = 'charging',
+  /** 智能充电暂停。 */
+  PAUSED = 'paused',
+  /** 充电已完成。 */
+  COMPLETED = 'completed',
+  /** 正在放电（向外供电）。 */
+  DISCHARGING = 'discharging',
+  /** 故障：充电错误或充电枪连接故障。 */
+  FAULT = 'fault'
+}
+
+/**
  * 驻车空调状态。对应 Android 端 m1358R。
  */
 export const CLIMATE_LABELS: string[] = ['未知', '开启', '关闭', '处理中'];

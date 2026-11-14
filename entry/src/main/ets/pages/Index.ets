@@ -2,7 +2,7 @@ import { common, abilityAccessCtrl } from '@kit.AbilityKit';
 import { VehicleRepository } from '../core/vehicle/VehicleRepository';
 import { ControlCoordinator } from '../core/vehicle/ControlCoordinator';
 import { VehicleCommands } from '../core/net/VehicleCommands';
-import { VehicleState } from '../core/model/VehicleState';
+import { VehicleState, ChargeStage } from '../core/model/VehicleState';
 import { AppIcon, AppIconName } from '../components/Icons';
 import { StateToggle, ToggleKind, TogglePhase } from '../components/StateToggle';
 import { VehiclePlan } from '../components/VehiclePlan';
@@ -235,10 +235,14 @@ struct Index {
   }
 
   /**
-   * 根据当前充电状态启停轮询。
+   * 根据当前充电阶段启停轮询。
+   *
+   * 只有「充电中」和「已暂停」需要轮询 —— 这两种情况下电量还会继续变。
+   * 其余阶段电量是静止的，轮询没有意义。
    */
   private syncChargeTimer(): void {
-    if (this.isCharging()) {
+    const stage = this.chargeStage();
+    if (stage === ChargeStage.CHARGING || stage === ChargeStage.PAUSED) {
       this.startChargeTimer();
     } else {
       this.stopChargeTimer();
@@ -683,14 +687,77 @@ struct Index {
   }
 
   /**
-   * 充电枪是否已连接（含正在充电）。
+   * 统一的充电阶段。
    *
-   * 充电枪插上但还没开始充电（计划中 / 空闲）时，chargerConnection 已是
-   * 「已连接」而 charging 还不是「充电中」—— 这时也要在车模上体现出来，
-   * 否则用户插了枪却看不到任何反应。
+   * 协议里有两组独立状态：充电枪连接状态（chargerConnection）与
+   * 充电状态（charging）。两者组合起来才是用户真正关心的一句话，
+   * 因此归一成单一阶段，UI 只认这个枚举。
+   *
+   * 判定按优先级从上到下，命中即返回：
+   *   1. 充电中 / 智能充电   → 充电中
+   *   2. 放电中              → 放电中
+   *   3. 已完成              → 已完成
+   *   4. 充电错误 / 连接故障 → 故障
+   *   5. 智能充电暂停        → 已暂停
+   *   6. 充电枪已连接        → 已插枪
+   *   7. 其余                → 未充电
+   *
+   * 「已完成」排在「已连接」之前 —— 充满后枪还插着，
+   * 这时用户关心的是「已充满」，而不是「插着枪」。
    */
-  private chargingConnected(): boolean {
-    return this.chargerConnection === '已连接' || this.isCharging();
+  private chargeStage(): ChargeStage {
+    if (this.isCharging()) {
+      return ChargeStage.CHARGING;
+    }
+    if (this.charging === '放电中') {
+      return ChargeStage.DISCHARGING;
+    }
+    if (this.charging === '已完成') {
+      return ChargeStage.COMPLETED;
+    }
+    if (this.charging === '错误' || this.chargerConnection === '连接故障') {
+      return ChargeStage.FAULT;
+    }
+    if (this.charging === '智能充电暂停') {
+      return ChargeStage.PAUSED;
+    }
+    if (this.chargerConnection === '已连接') {
+      return ChargeStage.PLUGGED;
+    }
+    return ChargeStage.IDLE;
+  }
+
+  /**
+   * 车模上是否显示充电标记点。
+   *
+   * 未充电与放电中都不显示 —— 放电时并没有插着充电枪。
+   */
+  private chargingMarked(): boolean {
+    const stage = this.chargeStage();
+    return stage !== ChargeStage.IDLE && stage !== ChargeStage.DISCHARGING;
+  }
+
+  /**
+   * 车模充电标记点的颜色，随充电阶段变化。
+   */
+  private chargeMarkerColor(): ResourceColor {
+    const stage = this.chargeStage();
+    if (stage === ChargeStage.COMPLETED) {
+      return $r('app.color.app_ok');
+    }
+    if (stage === ChargeStage.FAULT) {
+      return $r('app.color.app_error');
+    }
+    return $r('app.color.app_accent');
+  }
+
+  /**
+   * 车模充电标记点是否呼吸 —— 只有真正在充电时才呼吸。
+   *
+   * 之前把「已连接」当成充电中，导致充满之后光环还在转。
+   */
+  private chargeMarkerPulsing(): boolean {
+    return this.chargeStage() === ChargeStage.CHARGING;
   }
 
   /**
@@ -719,12 +786,56 @@ struct Index {
   }
 
   /**
+   * 充满剩余时长文案。
+   */
+  private remainingTimeText(): string {
+    if (this.remainingMinutes <= 0) {
+      return '';
+    }
+    if (this.remainingMinutes < 60) {
+      return `约 ${this.remainingMinutes} 分钟`;
+    }
+    const h = Math.floor(this.remainingMinutes / 60);
+    const m = this.remainingMinutes % 60;
+    if (m === 0) {
+      return `约 ${h} 小时`;
+    }
+    return `约 ${h} 小时 ${m} 分`;
+  }
+
+  /**
    * 充电枪已连接时显示在「电量」标题后面的 inline 补充信息。
    *
-   * 充电中显示功率 · 电流；只是插了枪还没开始充电时显示「已连接」。
-   * 放在标题后面而非另起一行，充电时行数不变，下方内容不会被顶下去。
+   * 按充电阶段给出一句话：
+   *   充电中 → 功率 · 电流 · 充满剩余时长
+   *   已完成 → 已完成
+   *   已插枪 → 已连接
+   *   已暂停 → 已暂停
+   *   故障   → 充电错误 / 连接故障
+   *
+   * 放在标题后面而非另起一行，行数不变，下方内容不会被顶下去。
    */
   private chargeInlineText(): string {
+    const stage = this.chargeStage();
+    if (stage === ChargeStage.IDLE) {
+      return '';
+    }
+    if (stage === ChargeStage.DISCHARGING) {
+      return '放电中';
+    }
+    if (stage === ChargeStage.COMPLETED) {
+      return '已完成';
+    }
+    if (stage === ChargeStage.FAULT) {
+      return this.chargerConnection === '连接故障' ? '连接故障' : '充电错误';
+    }
+    if (stage === ChargeStage.PAUSED) {
+      return '已暂停';
+    }
+    if (stage === ChargeStage.PLUGGED) {
+      return '已连接';
+    }
+    // 充电中：功率 · 电流 · 充满剩余时长
     const parts: string[] = [];
     const power = this.powerText();
     if (power.length > 0) {
@@ -734,10 +845,31 @@ struct Index {
     if (current.length > 0) {
       parts.push(current);
     }
+    const remaining = this.remainingTimeText();
+    if (remaining.length > 0) {
+      parts.push(remaining);
+    }
     if (parts.length === 0) {
-      return this.chargerConnection === '已连接' ? '已连接' : '';
+      return '充电中';
     }
     return parts.join(' · ');
+  }
+
+  /**
+   * 电量区 inline 文案的颜色，随充电阶段变化。
+   */
+  private chargeInlineColor(): ResourceColor {
+    const stage = this.chargeStage();
+    if (stage === ChargeStage.COMPLETED) {
+      return $r('app.color.app_ok');
+    }
+    if (stage === ChargeStage.FAULT) {
+      return $r('app.color.app_error');
+    }
+    if (stage === ChargeStage.DISCHARGING) {
+      return $r('app.color.app_secondary_text');
+    }
+    return $r('app.color.app_accent');
   }
 
   /**
@@ -1060,6 +1192,9 @@ struct Index {
         // 落定后再读一次 exterior 把尾门锁状态补齐。
         if (kind === ToggleKind.LOCK) {
           this.syncTrunkLock();
+        } else if (kind === ToggleKind.WINDOW) {
+          // 四扇窗可能不是同时落地的，落定时车模可能还停在中间状态。
+          this.syncWindowStates();
         }
         this.toast(`${this.toggleLabel(kind)}已${target === TogglePhase.ON ? '开启' : '关闭'}`);
         return;
@@ -1074,8 +1209,31 @@ struct Index {
     this.setPhase(kind, target);
     if (kind === ToggleKind.LOCK) {
       this.syncTrunkLock();
+    } else if (kind === ToggleKind.WINDOW) {
+      // 逐扇车窗状态可能已经更新过一轮，再读一次拿最新的。
+      this.syncWindowStates();
     }
     this.toast(`${this.toggleLabel(kind)}指令已发送`);
+  }
+
+  /**
+   * 单独读一次 exterior，把逐扇车窗 / 车门状态同步到车模。
+   *
+   * 车窗开合是四扇分别落地的，轮询确认到终态时车模可能还停留在
+   * 中间状态（只开好后两扇），落定后再补一次读取。
+   */
+  private async syncWindowStates(): Promise<void> {
+    const repository = this.repository;
+    if (repository === undefined) {
+      return;
+    }
+    try {
+      const state = await repository.readDomain('exterior', this.vin);
+      this.windowStates = state.windowStates;
+      this.doorStates = state.doorStates;
+    } catch (err) {
+      Log.warn(`同步车窗状态失败: ${(err as Error).message}`);
+    }
   }
 
   /**
@@ -1157,12 +1315,40 @@ struct Index {
       }
       return undefined;
     }
-    // 车窗：任一车窗未关闭即视为开启
-    if (state.windows === '车窗已关闭') {
-      return TogglePhase.OFF;
+    // 车窗：逐扇判定，要求四扇全部到达目标状态才算生效。
+    // 不能用 state.windows 汇总值 —— 它只要有一扇未关闭就算「未关闭」，
+    // 车端只开好后两扇时就会提前判定成功，前窗随后才补上。
+    const windowPhase = Index.windowPhaseOf(state.windowStates);
+    if (windowPhase !== undefined) {
+      return windowPhase;
     }
-    if (state.windows === '车窗未关闭') {
+    return undefined;
+  }
+
+  /**
+   * 由逐扇车窗状态推导开关阶段。
+   *
+   * 四扇全部未关闭 → 开启；四扇全部关闭 → 关闭；其余（部分开启 / 状态未知）
+   * 返回 undefined，表示车端尚未推进到终态，继续等待。
+   */
+  private static windowPhaseOf(states: number[]): TogglePhase | undefined {
+    if (states.length === 0) {
+      return undefined;
+    }
+    let opened = 0;
+    let closed = 0;
+    for (const s of states) {
+      if (s === 1 || s === 3) {
+        opened++;
+      } else if (s === 0) {
+        closed++;
+      }
+    }
+    if (opened === states.length) {
       return TogglePhase.ON;
+    }
+    if (closed === states.length) {
+      return TogglePhase.OFF;
     }
     return undefined;
   }
@@ -1437,7 +1623,9 @@ struct Index {
                 doorStates: this.doorStates,
                 hoodOpen: this.hoodOpen,
                 portOpen: this.portOpen,
-                charging: this.chargingConnected(),
+                charging: this.chargingMarked(),
+                chargeColor: this.chargeMarkerColor(),
+                chargePulsing: this.chargeMarkerPulsing(),
                 trunkUnlocked: this.trunkUnlocked,
                 trunkBusy: this.trunkBusy,
                 onTrunkTap: () => {
@@ -1502,16 +1690,16 @@ struct Index {
             // ---------- 电量与续航 ----------
             Row() {
               Column({ space: 0 }) {
-                // 「电量」标题行：充电中时 inline 追加功率 · 电流，
+                // 「电量」标题行：充电相关时 inline 追加一句状态说明，
                 // 放在标题后面而不是另起一行，行数不变，下方内容不会被顶下去。
                 Row({ space: 6 }) {
                   Text('电量')
                     .fontSize(12)
                     .fontColor($r('app.color.app_tertiary_text'))
-                  if (this.chargingConnected()) {
+                  if (this.chargingMarked() || this.chargeStage() === ChargeStage.DISCHARGING) {
                     Text(this.chargeInlineText())
                       .fontSize(12)
-                      .fontColor($r('app.color.app_accent'))
+                      .fontColor(this.chargeInlineColor())
                   }
                 }
                 .alignItems(VerticalAlign.Bottom)

@@ -41,12 +41,22 @@ export struct VehiclePlan {
   /** 充电口开启 —— 充电口标记点显示警示色。 */
   @Prop portOpen: boolean = false;
   /**
-   * 充电枪已连接 —— 充电口标记点改用插头图标 + 呼吸光环，并引出一段充电线。
+   * 充电枪已连接 —— 充电口标记点显示插头图标，并引出一段充电线。
    *
    * 原版 Android 车模没有充电指示（g10 只画「充电口打开」橙色标签），
    * 这里沿用车模既有的标记点语言，把充电状态交给同一个标记点表达。
    */
   @Prop @Watch('onChargingChanged') charging: boolean = false;
+  /**
+   * 充电标记点的强调色 —— 随充电阶段变化（充电中蓝 / 已完成绿 / 故障红）。
+   */
+  @Prop chargeColor: ResourceColor = $r('app.color.app_accent');
+  /**
+   * 充电标记点是否呼吸 —— 只有真正在充电时才呼吸。
+   *
+   * 之前把「已连接」直接当成充电中，导致充满之后光环还在转。
+   */
+  @Prop chargePulsing: boolean = false;
   /** 尾门解锁 —— 尾门标记点显示警示色。 */
   @Prop trunkUnlocked: boolean = false;
   /** 尾门指令执行中 —— 标记点显示蓝色描边与旋转指示器。 */
@@ -72,17 +82,15 @@ export struct VehiclePlan {
   private readonly viewH: number = 340;
   /** 屏幕密度：1vp 对应多少 px。 */
   private density: number = 3;
-  /** 呼吸光环的动画相位：0=扩散，1=收缩。 */
+  /** 充电呼吸动效的相位：0=收缩，1=扩散。 */
   @State chargePulse: number = 0;
-  /** 呼吸动画的定时器句柄。 */
+  /** 充电动画的定时器句柄。 */
   private pulseTimer: number = -1;
 
   aboutToAppear(): void {
     this.density = this.getUIContext().vp2px(1);
-    // 首次渲染若已是充电态，@Watch 不会触发，这里补一次启动。
-    if (this.charging) {
-      this.startPulse();
-    }
+    // 首次渲染若已在充电态，@Watch 不会触发，这里补一次启动。
+    this.syncPulse();
   }
 
   aboutToDisappear(): void {
@@ -90,10 +98,22 @@ export struct VehiclePlan {
   }
 
   /**
-   * 启动呼吸动画定时器。
+   * 按当前是否需要呼吸来启停动画。
+   */
+  private syncPulse(): void {
+    if (this.chargePulsing) {
+      this.startPulse();
+    } else {
+      this.stopPulse();
+      this.chargePulse = 0;
+    }
+  }
+
+  /**
+   * 启动充电呼吸动效。
    *
    * ArkUI 的 animation 属性只对「属性值发生变化」生效，静态值配 animation
-   * 不会动。因此这里用定时器交替切换相位，再由 animateTo 做平滑过渡。
+   * 不会动。因此用定时器交替切换相位，再由 animation 做平滑过渡。
    */
   private startPulse(): void {
     if (this.pulseTimer !== -1) {
@@ -101,11 +121,11 @@ export struct VehiclePlan {
     }
     this.pulseTimer = setInterval(() => {
       this.chargePulse = this.chargePulse === 0 ? 1 : 0;
-    }, 900);
+    }, 1100);
   }
 
   /**
-   * 停止呼吸动画定时器。
+   * 停止充电呼吸动效。
    */
   private stopPulse(): void {
     if (this.pulseTimer !== -1) {
@@ -115,15 +135,12 @@ export struct VehiclePlan {
   }
 
   /**
-   * 充电连接状态变化时启停呼吸动画。
+   * 充电标记状态变化时启停动效。
+   *
+   * 呼吸只跟随 chargePulsing（真正在充电），不是跟随 charging（插着枪）。
    */
   private onChargingChanged(): void {
-    if (this.charging) {
-      this.startPulse();
-    } else {
-      this.stopPulse();
-      this.chargePulse = 0;
-    }
+    this.syncPulse();
   }
 
   /**
@@ -152,40 +169,48 @@ export struct VehiclePlan {
   }
 
   /**
-   * 充电口标记点：充电枪已连接时改用插头图标 + 呼吸光环。
+   * 充电口标记点：充电枪已连接时用深蓝实心圆盘 + 白色插头 + 单圈呼吸光环。
    *
-   * 沿用车模既有的标记点语言：常态是纸底细框的中性圆点，
-   * 「部件打开」才升级为橙色实心。充电属于连接状态而非部件状态，
-   * 因此保持纸底，只把描边与图标换成强调色，再加一圈呼吸光环表达
-   * 「已接通」。视觉重量与「盖 / 尾」保持一致，不会压过车身线稿。
+   * 深蓝实心对纸白底是高对比，一眼可见；实心蓝底白图标也与右侧快捷按钮
+   * 「开启 = 蓝底白图标」是同一套视觉语言。
+   * 呼吸光环只有一圈，直径与透明度同步缓慢变化，不产生视觉噪音。
    */
   @Builder
   chargingPortMarker() {
     Stack({ alignContent: Alignment.Center }) {
-      // 呼吸光环：直径与透明度都随相位变化，形成扩散 / 收缩的脉冲。
-      // 由定时器切换 chargePulse，再用 animateTo 平滑过渡。
-      Stack()
-        .width(this.chargePulse === 0 ? 30 : 38)
-        .height(this.chargePulse === 0 ? 30 : 38)
-        .borderRadius(this.chargePulse === 0 ? 15 : 19)
-        .border({ width: 1, color: $r('app.color.app_accent') })
-        .opacity(this.chargePulse === 0 ? 0.15 : 0.5)
-        .animation({ duration: 900, curve: Curve.EaseInOut })
+      // 呼吸光环：只在真正充电时出现，直径与透明度随相位缓慢变化
+      if (this.chargePulsing) {
+        Stack()
+          .width(this.chargePulse === 0 ? 30 : 40)
+          .height(this.chargePulse === 0 ? 30 : 40)
+          .borderRadius(this.chargePulse === 0 ? 15 : 20)
+          .border({ width: 1.4, color: this.chargeColor })
+          .opacity(this.chargePulse === 0 ? 0.15 : 0.55)
+          .animation({ duration: 1100, curve: Curve.EaseInOut })
+      }
 
+      // 主体：实心圆盘，颜色随充电阶段变化
+      Stack()
+        .width(26)
+        .height(26)
+        .borderRadius(13)
+        .backgroundColor(this.chargeColor)
+
+      // 白色插头图标
       AppIcon({
         name: AppIconName.CHARGE_LINK,
         iconSize: 15,
-        color: $r('app.color.app_accent')
+        color: $r('app.color.app_on_accent')
       })
     }
-    .width(26)
-    .height(26)
-    .borderRadius(13)
-    .backgroundColor($r('app.color.app_surface'))
-    .border({ width: 1.2, color: $r('app.color.app_accent') })
+    // 外层容器取最大光环直径，保证 40px 的环不被裁切；
+    // 内部各元素仍以中心对齐，圆盘与光环同心。
+    .width(40)
+    .height(40)
+    .borderRadius(20)
     .position({
-      x: 52 - 13,
-      y: 238 - 13
+      x: 52 - 20,
+      y: 238 - 20
     })
   }
 
@@ -214,7 +239,7 @@ export struct VehiclePlan {
    *
    * 车门绕铰链向车身外侧展开，画成一块外凸的四边形门板：
    * 近边贴车身侧面（x=39 / x=161），远边向外偏移到 x=21 / x=179，
-   * 并沿车身方向错开 10 —— 前门向后错、后门向前错，形成开门透视。
+   * 并沿车身方向错开 10 —— 四扇门统一往车尾方向偏，形成一致的开门透视。
    * 坐标为 200×340 设计稿坐标系。
    */
   private doorPath(index: number): string {
@@ -224,9 +249,9 @@ export struct VehiclePlan {
       case 1: // 右前门
         return 'M161,100 L161,158 L179,168 L179,110 Z';
       case 2: // 左后门
-        return 'M39,164 L39,222 L21,212 L21,154 Z';
+        return 'M39,164 L39,222 L21,232 L21,174 Z';
       default: // 右后门
-        return 'M161,164 L161,222 L179,212 L179,154 Z';
+        return 'M161,164 L161,222 L179,232 L179,174 Z';
     }
   }
 
@@ -280,31 +305,33 @@ export struct VehiclePlan {
           .width(`${this.viewW}px`)
           .height(`${this.viewH}px`)
 
-        // 四窗：逐扇独立染色，开启时染警示色。框线与车身外框同粗
+        // 四窗：逐扇独立染色，开启时填充 + 描边都走警示色。
+        // 描边必须一起换 —— 原来描边始终是车身色，深色模式下填充色
+        // （app_warn_soft = #2C2113）在 #0E0F10 底上几乎看不出来。
         Path({ commands: 'M45,96 L98,96 L98,158 L45,158 Z' })
           .fill(this.isOpen(this.windowStates, 0) ? $r('app.color.app_warn_soft') : Color.Transparent)
-          .stroke($r('app.color.app_primary_text'))
+          .stroke(this.isOpen(this.windowStates, 0) ? $r('app.color.app_warn') : $r('app.color.app_primary_text'))
           .strokeWidth(this.sw(1.6))
           .strokeLineJoin(LineJoinStyle.Round)
           .width(`${this.viewW}px`)
           .height(`${this.viewH}px`)
         Path({ commands: 'M102,96 L155,96 L155,158 L102,158 Z' })
           .fill(this.isOpen(this.windowStates, 1) ? $r('app.color.app_warn_soft') : Color.Transparent)
-          .stroke($r('app.color.app_primary_text'))
+          .stroke(this.isOpen(this.windowStates, 1) ? $r('app.color.app_warn') : $r('app.color.app_primary_text'))
           .strokeWidth(this.sw(1.6))
           .strokeLineJoin(LineJoinStyle.Round)
           .width(`${this.viewW}px`)
           .height(`${this.viewH}px`)
         Path({ commands: 'M45,162 L98,162 L98,224 L45,224 Z' })
           .fill(this.isOpen(this.windowStates, 2) ? $r('app.color.app_warn_soft') : Color.Transparent)
-          .stroke($r('app.color.app_primary_text'))
+          .stroke(this.isOpen(this.windowStates, 2) ? $r('app.color.app_warn') : $r('app.color.app_primary_text'))
           .strokeWidth(this.sw(1.6))
           .strokeLineJoin(LineJoinStyle.Round)
           .width(`${this.viewW}px`)
           .height(`${this.viewH}px`)
         Path({ commands: 'M102,162 L155,162 L155,224 L102,224 Z' })
           .fill(this.isOpen(this.windowStates, 3) ? $r('app.color.app_warn_soft') : Color.Transparent)
-          .stroke($r('app.color.app_primary_text'))
+          .stroke(this.isOpen(this.windowStates, 3) ? $r('app.color.app_warn') : $r('app.color.app_primary_text'))
           .strokeWidth(this.sw(1.6))
           .strokeLineJoin(LineJoinStyle.Round)
           .width(`${this.viewW}px`)
@@ -355,7 +382,7 @@ export struct VehiclePlan {
         if (this.charging) {
           Path({ commands: 'M43 229 L30 214 L12 214' })
             .fill(Color.Transparent)
-            .stroke($r('app.color.app_accent'))
+            .stroke(this.chargeColor)
             .strokeWidth(this.sw(1.6))
             .strokeLineCap(LineCapStyle.Round)
             .strokeLineJoin(LineJoinStyle.Round)
