@@ -53,6 +53,60 @@ struct Index {
    */
   private static readonly CHARGE_POLL_INTERVAL_MS: number = 60000;
 
+  /**
+   * 空调 / 净化状态检查的兜底间隔，同时也是检查间隔的上限（毫秒）。
+   *
+   * 这两项都会到时自动停机：驻车空调与空气净化跑到设定时长后车端自动
+   * 停机，UI 必须跟着回落，否则按钮会一直停在「开」。
+   *
+   * 不做固定周期轮询 —— 车端在状态里给出「剩余运行分钟数」，据此推算
+   * 预计结束时刻，把检查排在那一刻之前，一次读取即可确认是否已停机。
+   * 固定周期要么太慢（漏掉停机），要么太密（白白发请求）。
+   *
+   * 30 分钟的上限是「看门狗」：用户在车端手动关掉空调/净化时，
+   * 我们无法预知，最迟 30 分钟内会发现。取 30 分钟是因为驻车空调的
+   * 常见时长就是 30 分钟 —— 上限放宽到不短于典型时长，
+   * 一次完整的空调周期通常只需要 1 次状态检查。
+   */
+  private static readonly CLIMATE_CHECK_MAX_INTERVAL_MS: number = 1800000;
+
+  /**
+   * 预计结束时刻之后的复核延迟量（毫秒）。
+   *
+   * 车端是在**预计结束时刻**停机的，所以检查要排在那一刻**之后**。
+   * 提前查必然还是「开启」，查完发现没停又得再排一轮 ——
+   * 那样到期前后会以 15 秒一轮连查，一次空调反而多出七八次请求。
+   *
+   * 延迟 30 秒是因为车端的剩余分钟数是取整的，实际停机可能比
+   * 预计时刻晚几十秒。查早了就靠「已过结束时刻」的 15 秒确认兜底。
+   */
+  private static readonly CLIMATE_CHECK_BUFFER_MS: number = 30000;
+
+  /**
+   * 临近结束时的最小检查间隔（毫秒）。
+   *
+   * 剩余时间为 0 或 1 分钟时，检查点已经紧贴预计结束时刻，
+   * 用这个下限避免出现「每 0 毫秒查一次」的空转。
+   */
+  private static readonly CLIMATE_CHECK_MIN_INTERVAL_MS: number = 30000;
+
+  /**
+   * 已过预计结束时刻时的确认间隔（毫秒）。
+   *
+   * 到点了还没停机，需要尽快确认到底停没停。
+   * 连续几次确认后仍报「开启」，会退到兜底间隔，不会一直这样查。
+   */
+  private static readonly CLIMATE_CHECK_OVERDUE_MS: number = 15000;
+
+  /**
+   * 连续多少次检查落在预计结束时刻之后仍报「开启」。
+   *
+   * 超过这个次数说明车端没在倒计时（或用户手动续时），改用兜底间隔，
+   * 避免高频空转。8 次 × 15 秒 = 两分钟的确认窗口，
+   * 足够覆盖车端剩余分钟数取整带来的误差。
+   */
+  private static readonly CLIMATE_CHECK_ENDGAME_LIMIT: number = 8;
+
   /** 正在拉取车辆状态。顶栏右上角显示刷新动效。 */
   @State loading: boolean = false;
   /** 下拉刷新指示器状态。 */
@@ -151,6 +205,26 @@ struct Index {
   private chargeTimer: number = -1;
   /** 充电轮询是否已有请求在途，避免并发重复拉取。 */
   private chargePolling: boolean = false;
+  /** 空调 / 净化状态检查是否已有请求在途。 */
+  private climatePolling: boolean = false;
+  /** 空调剩余运行分钟数，用于推算预计结束时刻。 */
+  private climateRemainingMinutes: number = -1;
+  /** 净化剩余运行分钟数，用于推算预计结束时刻。 */
+  private airRemainingMinutes: number = -1;
+  /** 上一次推算预计结束时刻时用到的空调剩余分钟数。 */
+  private climateObservedRemaining: number = -1;
+  /** 上一次推算预计结束时刻时用到的净化剩余分钟数。 */
+  private airObservedRemaining: number = -1;
+  /** 下一次状态检查的定时器句柄（单次延时，不是周期）。 */
+  private climateTimer: number = -1;
+  /** 已安排的检查间隔，用于避免重复排程。 */
+  private climateScheduledDelay: number = 0;
+  /** 空调预计结束时刻（epoch millis），0 表示未知。 */
+  private climateExpectedEnd: number = 0;
+  /** 净化预计结束时刻（epoch millis），0 表示未知。 */
+  private airExpectedEnd: number = 0;
+  /** 连续多少次检查落在预计结束时刻之后仍报「开启」。 */
+  private climateEndgameCount: number = 0;
 
   aboutToAppear(): void {
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -209,6 +283,9 @@ struct Index {
   onPageHide(): void {
     this.stopTextTimer();
     this.stopChargeTimer();
+    // 只取消已排的检查点，保留预计结束时刻 —— 它是绝对时刻，
+    // 回到前台时按它重排即可，不用重新推算。
+    this.clearClimateSchedule();
   }
 
   /**
@@ -217,6 +294,7 @@ struct Index {
   aboutToDisappear(): void {
     this.stopTextTimer();
     this.stopChargeTimer();
+    this.stopClimateTimer();
   }
 
   /**
@@ -299,6 +377,217 @@ struct Index {
   }
 
   /**
+   * 根据当前空调 / 净化状态安排下一次状态检查。
+   *
+   * 这两项都会到时自动停机（车端到时停机），所以开启期间必须能发现
+   * 它们已经停了，把按钮回落。
+   *
+   * 策略是「按预计结束时刻定时」而不是固定周期轮询：
+   *   - 车端在状态里给出剩余运行分钟数 → 推算预计结束时刻
+   *   - 把检查排在那个时刻之后，一次读取即可确认是否已停机
+   *   - 拿不到剩余时长（老车 / 车端未返回）→ 退到兜底间隔
+   *
+   * 固定周期轮询的问题：周期短了浪费请求（一次 30 分钟的空调要查 6 次），
+   * 周期长了又会漏掉停机时刻。
+   */
+  private syncClimateTimer(): void {
+    const climateOn = this.climatePhase === TogglePhase.ON;
+    const airOn = this.airPhase === TogglePhase.ON;
+    if (!climateOn && !airOn) {
+      this.stopClimateTimer();
+      return;
+    }
+
+    // 预计结束时刻只在两种情况下重算：
+    //   1. 刚刚转为开启 —— 建立锚点
+    //   2. 剩余时长变长了 —— 用户在车端续了时
+    // 其余情况一律沿用旧锚点。若每轮都用「当前剩余」重算，
+    // 车端剩余值不递减时结束时刻会一直往后漂，永远等不到收尾。
+    const now = Date.now();
+    this.climateExpectedEnd = Index.refreshExpectedEnd(
+      this.climateExpectedEnd, this.climateObservedRemaining,
+      this.climateRemainingMinutes, climateOn, now);
+    this.climateObservedRemaining = climateOn ? this.climateRemainingMinutes : -1;
+
+    this.airExpectedEnd = Index.refreshExpectedEnd(
+      this.airExpectedEnd, this.airObservedRemaining,
+      this.airRemainingMinutes, airOn, now);
+    this.airObservedRemaining = airOn ? this.airRemainingMinutes : -1;
+
+    // 两项都在跑时取更早的那个结束时刻 —— 先结束的先查，避免漏掉。
+    const deadline = Index.earliestDeadline(this.climateExpectedEnd, this.airExpectedEnd);
+
+    let delay: number = Index.CLIMATE_CHECK_MAX_INTERVAL_MS;
+    if (deadline > 0) {
+      // 检查点排在预计结束时刻**之后** —— 车端到点才停机，提前查是白查。
+      const wait = deadline + Index.CLIMATE_CHECK_BUFFER_MS - now;
+      if (wait <= 0) {
+        // 已经过了预计结束时刻，尽快确认到底停没停。
+        delay = Index.CLIMATE_CHECK_OVERDUE_MS;
+      } else {
+        delay = Math.max(Index.CLIMATE_CHECK_MIN_INTERVAL_MS, Math.min(wait, delay));
+      }
+    }
+    // 到了预计结束时刻还反复报「开启」——车端没在倒计时（或用户手动续时），
+    // 连续几次之后改用兜底间隔，避免高频空转。
+    if (this.climateEndgameCount >= Index.CLIMATE_CHECK_ENDGAME_LIMIT) {
+      delay = Index.CLIMATE_CHECK_MAX_INTERVAL_MS;
+    }
+
+    // 间隔没变就不用重排 —— 空调与净化常常在同一秒结束，
+    // 重排会白白丢掉已排好的检查点。
+    if (this.climateTimer !== -1 && this.climateScheduledDelay === delay) {
+      return;
+    }
+
+    // 只清掉已排的检查点，保留预计结束时刻与收尾计数 ——
+    // stopClimateTimer 会把这两者一起清零，那样每轮重排都会丢掉状态。
+    this.clearClimateSchedule();
+    this.climateScheduledDelay = delay;
+    // 用 setTimeout 而非 setInterval：ArkTS 的 setInterval 只能等间隔触发，
+    // 而这里的检查点每次都不同（随剩余时长收敛），必须单次排程。
+    this.climateTimer = setTimeout(() => {
+      this.climateTimer = -1;
+      this.climateScheduledDelay = 0;
+      this.pollClimate();
+    }, delay);
+    Log.info(`空调/净化运行中：安排状态检查，${delay}ms 后`
+      + `（剩余 ${this.climateRemainingMinutes}/${this.airRemainingMinutes} 分钟）`);
+  }
+
+  /**
+   * 取消已安排的检查点，但不动状态。
+   */
+  private clearClimateSchedule(): void {
+    if (this.climateTimer !== -1) {
+      clearTimeout(this.climateTimer);
+      this.climateTimer = -1;
+    }
+    this.climateScheduledDelay = 0;
+  }
+
+  /**
+   * 停止空调 / 净化状态检查，并清掉相关状态。
+   */
+  private stopClimateTimer(): void {
+    this.clearClimateSchedule();
+    this.climateEndgameCount = 0;
+    this.climateExpectedEnd = 0;
+    this.airExpectedEnd = 0;
+  }
+
+  /**
+   * 静默拉一次空调与空气净化状态。
+   *
+   * 只读 climate + air 两个域，不触发整页刷新动效。
+   * 这两个功能会到时自动关闭，必须靠状态检查把按钮状态落定。
+   */
+  private async pollClimate(): Promise<void> {
+    if (this.repository === undefined || this.vin.length === 0) {
+      return;
+    }
+    if (this.climatePolling) {
+      return;
+    }
+    this.climatePolling = true;
+    try {
+      const climateState = await this.repository.readDomain('climate', this.vin);
+      const climateWasOn = this.climatePhase === TogglePhase.ON;
+      if (climateState.climate === '开启') {
+        this.climatePhase = TogglePhase.ON;
+      } else if (climateState.climate === '关闭') {
+        this.climatePhase = TogglePhase.OFF;
+      }
+      this.climateRemainingMinutes = climateState.climateRuntimeMinutes ?? -1;
+      this.climate = climateState.climate;
+
+      const airState = await this.repository.readDomain('air', this.vin);
+      const airWasOn = this.airPhase === TogglePhase.ON;
+      if (airState.air === '开启') {
+        this.airPhase = TogglePhase.ON;
+      } else if (airState.air === '关闭') {
+        this.airPhase = TogglePhase.OFF;
+      }
+      this.airRemainingMinutes = airState.airRuntimeMinutes ?? -1;
+
+      const now = Date.now();
+      const stillOn = this.climatePhase === TogglePhase.ON || this.airPhase === TogglePhase.ON;
+
+      // 到了预计结束时刻仍报「开启」——车端没在倒计时（或用户手动续时），
+      // 连续几次之后改用兜底间隔，避免高频空转。
+      const pastDeadline = (this.climateExpectedEnd > 0 && this.climateExpectedEnd <= now) ||
+        (this.airExpectedEnd > 0 && this.airExpectedEnd <= now);
+      if (stillOn && pastDeadline) {
+        this.climateEndgameCount++;
+      } else {
+        this.climateEndgameCount = 0;
+      }
+
+      // 状态有变化时同步桌面卡片 —— 空调/净化停了，卡片文案也要跟着改。
+      if (climateWasOn !== (this.climatePhase === TogglePhase.ON) ||
+        airWasOn !== (this.airPhase === TogglePhase.ON)) {
+        this.publishCard();
+      }
+    } catch (err) {
+      const e = err as BusinessError;
+      Log.warn(`空调/净化状态检查失败: code=${e.code} ${e.message}`);
+    } finally {
+      this.climatePolling = false;
+      // 状态可能已变为关闭，据此重排下一次检查
+      this.syncClimateTimer();
+    }
+  }
+
+  /**
+   * 取两个预计结束时刻中更早的那个。0 表示未知。
+   */
+  private static earliestDeadline(a: number, b: number): number {
+    if (a <= 0) {
+      return b;
+    }
+    if (b <= 0) {
+      return a;
+    }
+    return Math.min(a, b);
+  }
+
+  /**
+   * 重算预计结束时刻。
+   *
+   * 只在「刚开启」或「剩余时长变长」时重算：
+   *   - 刚开启：还没有锚点，用当前剩余分钟数建立
+   *   - 剩余变长：用户在车端续了时，锚点要跟着往后挪
+   * 其余情况沿用旧锚点 —— 车端的剩余值可能不精确递减，
+   * 每轮重算会让结束时刻一直往后漂，永远等不到收尾。
+   *
+   * @param expectedEnd       现有锚点，0 表示还没有
+   * @param observedRemaining 上次观测到的剩余分钟数，-1 表示未知
+   * @param remaining         当前剩余分钟数，-1 表示未知
+   * @param running           当前是否在运行
+   * @param now               当前时刻
+   * @returns 新的预计结束时刻，0 表示未知
+   */
+  private static refreshExpectedEnd(expectedEnd: number, observedRemaining: number,
+    remaining: number, running: boolean, now: number): number {
+    if (!running) {
+      return 0;
+    }
+    if (remaining < 0) {
+      // 拿不到剩余时长：没有锚点可用，只能退回兜底间隔。
+      return expectedEnd;
+    }
+    if (expectedEnd <= 0) {
+      // 刚开启 —— 建立锚点。
+      return now + remaining * 60000;
+    }
+    if (observedRemaining >= 0 && remaining > observedRemaining) {
+      // 续了时 —— 锚点往后挪一个差值。
+      return expectedEnd + (remaining - observedRemaining) * 60000;
+    }
+    return expectedEnd;
+  }
+
+  /**
    * 启动流程：读取上次刷新时刻 → 加载会话与状态。
    */
   private async startup(): Promise<void> {
@@ -352,6 +641,9 @@ struct Index {
     this.refreshText();
     // 充电中的轮询在页面隐藏时已停，回到前台需要恢复
     this.syncChargeTimer();
+    // 空调 / 净化的状态检查同理 —— 预计结束时刻是绝对时刻，
+    // 隐藏期间即使已经过了也会立刻查一次确认。
+    this.syncClimateTimer();
     this.resume();
   }
 
@@ -666,6 +958,12 @@ struct Index {
     // 车模门窗：逐扇独立染色 / 绘制展开门板
     this.windowStates = state.windowStates;
     this.doorStates = state.doorStates;
+
+    // 空调 / 净化到时会自动关闭，开启期间要持续检查才能让按钮回落。
+    // 剩余时长用来推算预计结束时刻，把状态检查排在那之前。
+    this.climateRemainingMinutes = state.climateRuntimeMinutes ?? -1;
+    this.airRemainingMinutes = state.airRuntimeMinutes ?? -1;
+    this.syncClimateTimer();
   }
 
   /**
@@ -1333,6 +1631,9 @@ struct Index {
         } else if (kind === ToggleKind.WINDOW) {
           // 四扇窗可能不是同时落地的，落定时车模可能还停在中间状态。
           this.syncWindowStates();
+        } else if (kind === ToggleKind.CLIMATE || kind === ToggleKind.PURIFIER) {
+          // 空调 / 净化开启后要持续轮询，等车端到时自动关闭时回落按钮
+          this.syncClimateTimer();
         }
         this.toast(`${this.toggleLabel(kind)}已${target === TogglePhase.ON ? '开启' : '关闭'}`);
         return;
@@ -1350,6 +1651,8 @@ struct Index {
     } else if (kind === ToggleKind.WINDOW) {
       // 逐扇车窗状态可能已经更新过一轮，再读一次拿最新的。
       this.syncWindowStates();
+    } else if (kind === ToggleKind.CLIMATE || kind === ToggleKind.PURIFIER) {
+      this.syncClimateTimer();
     }
     this.toast(`${this.toggleLabel(kind)}指令已发送`);
   }
@@ -1424,6 +1727,9 @@ struct Index {
 
     if (kind === ToggleKind.CLIMATE) {
       const state = await repository.readDomain('climate', this.vin);
+      // 顺带取回剩余运行分钟数 —— 据此推算预计结束时刻，
+      // 把状态检查排在那一刻之前。
+      this.climateRemainingMinutes = state.climateRuntimeMinutes ?? -1;
       if (state.climate === '开启') {
         return TogglePhase.ON;
       }
@@ -1436,6 +1742,7 @@ struct Index {
 
     if (kind === ToggleKind.PURIFIER) {
       const state = await repository.readDomain('air', this.vin);
+      this.airRemainingMinutes = state.airRuntimeMinutes ?? -1;
       if (state.air === '开启') {
         return TogglePhase.ON;
       }

@@ -137,6 +137,9 @@ export class VehicleStateReader {
     state.air = VehicleState.enumLabel(ProtoValue.asInteger(ProtoValue.get(fields, 6)), AIR_LABELS);
     state.airQualityIndex = ProtoValue.asInteger(ProtoValue.get(fields, 9));
     state.pm25UgM3 = ProtoValue.asFiniteNumber(ProtoValue.get(fields, 10));
+    // field 11 = 剩余运行分钟数。据此可推算预计结束时刻，
+    // 状态检查安排在那一刻前后即可，不必固定周期轮询。
+    state.airRuntimeMinutes = ProtoValue.asInteger(ProtoValue.get(fields, 11));
     state.airStateAt = Date.now();
   }
 

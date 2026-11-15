@@ -60,6 +60,13 @@ export class VehicleState {
   air: string = '未知';
   airQualityIndex: number | undefined = undefined;
   pm25UgM3: number | undefined = undefined;
+  /**
+   * 净化剩余运行分钟数。precleaning field 11。
+   *
+   * 车端给出的剩余时长是「剩余分钟数」，据此可以推算预计结束时刻，
+   * 状态检查只需排在那个时刻前后，不必固定周期轮询。
+   */
+  airRuntimeMinutes: number | undefined = undefined;
 
   // ---- 里程 ----
   odometerKm: number | undefined = undefined;
