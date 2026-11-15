@@ -93,14 +93,14 @@ export class GrpcClient {
           throw new BusinessError(e.code, e.message);
         }
         if (attempt !== 0) {
-          // 续期后仍被拒：清空本地登录态
-          if (this.context !== undefined) {
-            await AuthService.refreshIfNeeded(this.context, this.session, true);
-          }
+          // 已经续期过一次仍被拒：登录态确实失效了，交给调用方处理。
+          // 这里**不再续期** —— 刷新接口会轮换 refresh token，
+          // 用同一个 refresh token 连续调两次可能让服务端把旧的那个作废，
+          // 反而把用户踢出登录。
           throw new BusinessError(401, '登录状态已失效，请重新登录');
         }
         // token 被拒：强制续期后重试一次
-        Log.info('C3 拒绝 access token，刷新后重试一次');
+        Log.info(`C3 拒绝 access token（${e.message}），刷新后重试一次`);
         if (this.context !== undefined) {
           await AuthService.refreshIfNeeded(this.context, this.session, true);
         }
@@ -129,10 +129,36 @@ export class GrpcClient {
   }
 
   /**
-   * 判断异常是否为 UNAUTHENTICATED。
+   * 判断异常是否为鉴权失败（需要续期 token 后重试）。
+   *
+   * 两种表现都要认：
+   *   1. HTTP 401 / 403 —— 通道层抛的 `UNAUTHENTICATED: HTTP 401`
+   *   2. **gRPC `grpc-status 16`** —— 服务端的正常鉴权失败返回，
+   *      消息形如 `gRPC 错误: status=16 Unauthorized: expired_token`
+   *
+   * 第 2 种是实际会遇到的：服务端用标准的 grpc-status 16 表示
+   * token 过期，HTTP 层仍是 200。只认 `UNAUTHENTICATED` 字样的话，
+   * 续期重试永远不触发，token 一过期所有请求就全部报错。
    */
   static isUnauthenticated(err: BusinessError): boolean {
-    return err.message !== undefined && err.message.indexOf('UNAUTHENTICATED') >= 0;
+    const message = err.message;
+    if (message === undefined || message.length === 0) {
+      return false;
+    }
+    // HTTP 层的 401 / 403
+    if (message.indexOf('UNAUTHENTICATED') >= 0) {
+      return true;
+    }
+    // gRPC status 16 = UNAUTHENTICATED（见 io.grpc.Status.Code）
+    if (message.indexOf('status=16') >= 0) {
+      return true;
+    }
+    // 服务端的过期措辞兜底
+    if (message.indexOf('expired_token') >= 0 ||
+      message.indexOf('Unauthorized') >= 0) {
+      return true;
+    }
+    return false;
   }
 
   /**
