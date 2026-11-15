@@ -191,7 +191,7 @@ struct Index {
    */
   @State doorStates: number[] = [];
 
-  /** 里程口径：0=总里程 1=手动小计 2=自动小计。 */
+  /** 里程口径：0=总里程 1=自动小计 2=手动小计。切换顺序：总里程 → 自动小计 → 手动小计。 */
   @State mileageMode: number = 0;
 
   /** 当前 Tab：0=概览 1=控制 2=详情。 */
@@ -1216,9 +1216,9 @@ struct Index {
   private mileageValue(): string {
     let value = this.odometerKm;
     if (this.mileageMode === 1) {
-      value = this.tripManualKm;
-    } else if (this.mileageMode === 2) {
       value = this.tripAutomaticKm;
+    } else if (this.mileageMode === 2) {
+      value = this.tripManualKm;
     }
     if (value < 0) {
       return '—';
@@ -1228,10 +1228,10 @@ struct Index {
 
   private mileageLabel(): string {
     if (this.mileageMode === 1) {
-      return '手动小计';
+      return '自动小计';
     }
     if (this.mileageMode === 2) {
-      return '自动小计';
+      return '手动小计';
     }
     return '总里程';
   }
@@ -1241,10 +1241,10 @@ struct Index {
    */
   private mileageAverageSpeed(): number {
     if (this.mileageMode === 1) {
-      return this.manualAverageSpeedKph;
+      return this.automaticAverageSpeedKph;
     }
     if (this.mileageMode === 2) {
-      return this.automaticAverageSpeedKph;
+      return this.manualAverageSpeedKph;
     }
     return -1;
   }
@@ -1254,10 +1254,10 @@ struct Index {
    */
   private mileageAverageEnergy(): number {
     if (this.mileageMode === 1) {
-      return this.manualAverageEnergyKwhPer100Km;
+      return this.automaticAverageEnergyKwhPer100Km;
     }
     if (this.mileageMode === 2) {
-      return this.automaticAverageEnergyKwhPer100Km;
+      return this.manualAverageEnergyKwhPer100Km;
     }
     return -1;
   }
@@ -1274,9 +1274,9 @@ struct Index {
     }
     let distance = this.odometerKm;
     if (this.mileageMode === 1) {
-      distance = this.tripManualKm;
-    } else if (this.mileageMode === 2) {
       distance = this.tripAutomaticKm;
+    } else if (this.mileageMode === 2) {
+      distance = this.tripManualKm;
     }
     const speed = this.mileageAverageSpeed();
     if (distance < 0 || speed <= 0) {
