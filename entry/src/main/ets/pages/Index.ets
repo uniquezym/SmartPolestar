@@ -2090,8 +2090,9 @@ struct Index {
               // 等刷新结束后再更新。
               if (this.loading && !this.refreshing) {
                 LoadingProgress()
-                  .width(15)
-                  .height(15)
+                  // 与尾门执行中的转圈一样大（24px），两处动效视觉一致
+                  .width(24)
+                  .height(24)
                   .color($r('app.color.app_accent'))
               } else if (this.lastRefreshText.length > 0) {
                 Text(this.lastRefreshText)
