@@ -41,6 +41,10 @@
       "value": "#D5D4CD"
     },
     {
+      "name": "app_rule_strong",
+      "value": "#C4C3BB"
+    },
+    {
       "name": "app_divider",
       "value": "#D5D4CD"
     },

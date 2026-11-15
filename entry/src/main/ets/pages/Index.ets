@@ -1,6 +1,8 @@
 import { common, abilityAccessCtrl } from '@kit.AbilityKit';
 import { VehicleRepository } from '../core/vehicle/VehicleRepository';
 import { ControlCoordinator } from '../core/vehicle/ControlCoordinator';
+import { CampModeController } from '../core/vehicle/CampModeController';
+import { BackgroundKeeper } from '../service/BackgroundKeeper';
 import { VehicleCommands } from '../core/net/VehicleCommands';
 import { VehicleState, ChargeStage, ChargeStageResolver } from '../core/model/VehicleState';
 import { AppIcon, AppIconName } from '../components/Icons';
@@ -169,6 +171,23 @@ struct Index {
   @State climatePhase: TogglePhase = TogglePhase.OFF;
   @State airPhase: TogglePhase = TogglePhase.OFF;
   @State windowPhase: TogglePhase = TogglePhase.OFF;
+  /** 尾门开合阶段（已打开 / 已关闭）。 */
+  @State trunkPhase: TogglePhase = TogglePhase.OFF;
+  /** 尾门锁阶段（已锁 / 未锁）。 */
+  @State trunkLockPhase: TogglePhase = TogglePhase.OFF;
+
+  /** 露营模式阶段。 */
+  @State campPhase: TogglePhase = TogglePhase.OFF;
+  /** 露营模式运行时长（分钟）。 */
+  @State campDurationMinutes: number = 60;
+  /** 露营模式剩余时间（分钟），0 表示未开启。 */
+  @State campRemainingMinutes: number = 0;
+  /** 露营模式剩余时间占全程的比例（0 ~ 1）。 */
+  @State campRemainingRatio: number = 0;
+  /** AQI 指数，-1 表示未知。控制页空气净化卡片用。 */
+  @State airQualityIndex: number = -1;
+  /** PM2.5 浓度（μg/m³），-1 表示未知。控制页空气净化卡片用。 */
+  @State pm25UgM3: number = -1;
 
   /** 尾门解锁态 —— 车模尾门标记点显示警示色。 */
   @State trunkUnlocked: boolean = false;
@@ -199,6 +218,8 @@ struct Index {
 
   private context: common.UIAbilityContext | undefined = undefined;
   private repository: VehicleRepository | undefined = undefined;
+  /** 露营模式控制器 —— 负责时长档位、到期时刻与倒计时心跳。 */
+  private campController: CampModeController | undefined = undefined;
   /** 「距上次刷新」文案的定时器句柄。 */
   private textTimer: number = -1;
   /** 充电中轮询电池状态的定时器句柄。 */
@@ -232,6 +253,8 @@ struct Index {
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     this.repository = new VehicleRepository(this.context);
     this.requestLocationPermission();
+    // 露营模式状态从本地持久化恢复，不依赖网络
+    this.initCampMode();
     // 先读完刷新时刻再拉数据，保证「距上次刷新」的判断用的是真实值
     this.startup();
   }
@@ -530,6 +553,8 @@ struct Index {
           this.publishCard();
         }
         this.airRemainingMinutes = airState.airRuntimeMinutes ?? -1;
+        this.airQualityIndex = airState.airQualityIndex ?? -1;
+        this.pm25UgM3 = airState.pm25UgM3 ?? -1;
       }
 
       const now = Date.now();
@@ -969,8 +994,16 @@ struct Index {
     // 车模标记点：尾门锁、机盖、充电口。判定对齐原版 g10（1 或 3 视为开启）。
     if (state.tailgateLock === '未锁') {
       this.trunkUnlocked = true;
+      this.trunkLockPhase = TogglePhase.ON;
     } else if (state.tailgateLock === '已锁') {
       this.trunkUnlocked = false;
+      this.trunkLockPhase = TogglePhase.OFF;
+    }
+    // 尾门开合：field 12 枚举，'已打开' 表示尾门处于打开状态。
+    if (state.tailgate === '已打开') {
+      this.trunkPhase = TogglePhase.ON;
+    } else if (state.tailgate === '已关闭') {
+      this.trunkPhase = TogglePhase.OFF;
     }
     this.hoodOpen = state.hoodState === 1 || state.hoodState === 3;
     this.portOpen = state.chargePortState === 1 || state.chargePortState === 3;
@@ -983,6 +1016,8 @@ struct Index {
     // 剩余时长用来推算预计结束时刻，把状态检查排在那之前。
     this.climateRemainingMinutes = state.climateRuntimeMinutes ?? -1;
     this.airRemainingMinutes = state.airRuntimeMinutes ?? -1;
+    this.airQualityIndex = state.airQualityIndex ?? -1;
+    this.pm25UgM3 = state.pm25UgM3 ?? -1;
     this.syncClimateTimer();
   }
 
@@ -1417,6 +1452,193 @@ struct Index {
     return true;
   }
 
+  // ---------- 露营模式 ----------
+
+  /**
+   * 初始化露营模式：恢复持久化的时长与到期时刻。
+   *
+   * 应用被杀掉重开后，若到期时刻仍在未来，认为露营模式仍在运行，
+   * 重新排程到期定时器并继续倒计时。
+   */
+  private async initCampMode(): Promise<void> {
+    const ctx = this.context;
+    if (ctx === undefined) {
+      return;
+    }
+    const controller = new CampModeController(
+      () => {
+        this.onCampExpired();
+      },
+      () => {
+        this.refreshCampRemaining();
+      }
+    );
+    this.campController = controller;
+    const duration = await controller.attach(ctx);
+    this.campDurationMinutes = duration;
+    if (controller.isActive()) {
+      this.campPhase = TogglePhase.ON;
+      controller.resume();
+      this.refreshCampRemaining();
+    }
+  }
+
+  /**
+   * 刷新剩余时间与进度条比例。
+   */
+  private refreshCampRemaining(): void {
+    const controller = this.campController;
+    if (controller === undefined) {
+      return;
+    }
+    this.campRemainingMinutes = controller.remainingMinutes();
+    this.campRemainingRatio = controller.remainingRatio();
+  }
+
+  /**
+   * 下发一条车控指令。
+   *
+   * @returns 是否下发成功
+   */
+  private async executeAction(action: string): Promise<boolean> {
+    const ctx = this.context;
+    const client = this.repository?.getClient();
+    const session = this.repository?.getSession();
+    if (ctx === undefined || client === undefined || session === undefined) {
+      this.errorMessage = '会话未就绪，请重试';
+      return false;
+    }
+    return await new Promise<boolean>((resolve: (result: boolean) => void) => {
+      const coordinator = new ControlCoordinator(ctx, session, client);
+      coordinator.execute(this.vin, action, (success: boolean, message: string) => {
+        if (!success) {
+          this.toast(message.length > 0 ? message : '指令下发失败');
+          resolve(false);
+          return;
+        }
+        resolve(true);
+      });
+    });
+  }
+
+  /**
+   * 露营模式开关。
+   *
+   * 开启 = 下发驻车空调启动 + 记录到期时刻；
+   * 关闭 = 下发驻车空调停止 + 清除到期时刻。
+   */
+  private async toggleCamp(): Promise<void> {
+    if (!this.controlPrerequisites()) {
+      return;
+    }
+    const controller = this.campController;
+    if (controller === undefined) {
+      this.errorMessage = '会话未就绪，请重试';
+      return;
+    }
+
+    // 关闭路径
+    if (this.campPhase === TogglePhase.ON) {
+      this.campPhase = TogglePhase.PENDING;
+      const success = await this.executeAction(VehicleCommands.ACTION_CLIMATE_STOP);
+      if (!success) {
+        this.campPhase = TogglePhase.ON;
+        return;
+      }
+      await controller.stop();
+      this.campPhase = TogglePhase.OFF;
+      this.campRemainingMinutes = 0;
+      this.campRemainingRatio = 0;
+      this.climatePhase = TogglePhase.OFF;
+      this.toast('露营模式已关闭');
+      return;
+    }
+
+    // 开启路径：空调与净化互斥，净化在跑时不能开露营模式
+    if (this.airActive()) {
+      this.toast('空气净化运行中，无法开启露营模式');
+      return;
+    }
+
+    this.campPhase = TogglePhase.PENDING;
+    const success = await this.executeAction(VehicleCommands.ACTION_CLIMATE_START);
+    if (!success) {
+      this.campPhase = TogglePhase.OFF;
+      return;
+    }
+    await controller.start(this.campDurationMinutes);
+    this.campPhase = TogglePhase.ON;
+    this.climatePhase = TogglePhase.ON;
+    this.refreshCampRemaining();
+    // 退到后台仍需到期自动关闭，申请长时任务
+    await BackgroundKeeper.start(this.context as common.UIAbilityContext);
+    this.toast('露营模式已开启');
+  }
+
+  /**
+   * 露营模式到期：关闭驻车空调，净化若在跑则一并关闭。
+   */
+  private async onCampExpired(): Promise<void> {
+    this.campPhase = TogglePhase.OFF;
+    this.campRemainingMinutes = 0;
+    this.campRemainingRatio = 0;
+    this.climatePhase = TogglePhase.OFF;
+    await this.executeAction(VehicleCommands.ACTION_CLIMATE_STOP);
+    if (this.airActive()) {
+      await this.executeAction(VehicleCommands.ACTION_AIR_STOP);
+      this.airPhase = TogglePhase.OFF;
+    }
+    this.toast('露营模式已到时，驻车空调已关闭');
+  }
+
+  /**
+   * 结束露营模式（只清本地状态，不再下发指令）。
+   *
+   * 用于「空调被别处关掉」的场景：指令已经下过了，这里只清理倒计时。
+   */
+  private async stopCampMode(): Promise<void> {
+    const controller = this.campController;
+    if (controller === undefined) {
+      return;
+    }
+    await controller.stop();
+    this.campPhase = TogglePhase.OFF;
+    this.campRemainingMinutes = 0;
+    this.campRemainingRatio = 0;
+  }
+
+  /**
+   * 调节露营模式运行时长。
+   *
+   * 未运行时只改档位并持久化；运行中滑块已置灰，不会走到这里。
+   */
+  private async changeCampDuration(minutes: number): Promise<void> {
+    this.campDurationMinutes = minutes;
+    const controller = this.campController;
+    if (controller === undefined) {
+      return;
+    }
+    await controller.saveDuration(minutes);
+  }
+
+  /**
+   * 下发寻车指令（鸣笛 / 闪灯 / 鸣笛并闪灯）。
+   *
+   * 这三个动作没有可回读的状态，下发成功即提示用户，不做轮询确认。
+   *
+   * @param action 动作标识（honk / flash / honk-flash）
+   */
+  private async honkFlash(action: string): Promise<void> {
+    if (!this.controlPrerequisites()) {
+      return;
+    }
+    const success = await this.executeAction(action);
+    if (!success) {
+      return;
+    }
+    this.toast(`${VehicleCommands.label(action)}指令已发送`);
+  }
+
   /**
    * 快捷开关点击：进入执行中态，下发指令，轮询确认车端状态后落定。
    *
@@ -1495,6 +1717,12 @@ struct Index {
         }
         // 指令已下发，状态待确认：由 confirmToggle 轮询车端后落定
         this.confirmToggle(kind, action, prev);
+        // 从概览页关掉驻车空调，等同于结束露营模式 ——
+        // 露营模式是靠空调在跑支撑的，空调没了倒计时就没有意义了。
+        if (kind === ToggleKind.CLIMATE && action === VehicleCommands.ACTION_CLIMATE_STOP &&
+          this.campPhase === TogglePhase.ON) {
+          this.stopCampMode();
+        }
       });
     } catch (err) {
       const e = err as BusinessError;
@@ -1518,6 +1746,14 @@ struct Index {
     }
     if (kind === ToggleKind.WINDOW) {
       return action === VehicleCommands.ACTION_WINDOWS_OPEN;
+    }
+    // 尾门开合与尾门解锁都是「打开」方向，降低了车辆的物理防护，
+    // 与整车解锁同级，需要指纹门禁。
+    if (kind === ToggleKind.TRUNK) {
+      return action === VehicleCommands.ACTION_TRUNK_OPEN;
+    }
+    if (kind === ToggleKind.TRUNK_LOCK) {
+      return action === VehicleCommands.ACTION_UNLOCK_TRUNK;
     }
     return false;
   }
@@ -1651,6 +1887,9 @@ struct Index {
         } else if (kind === ToggleKind.WINDOW) {
           // 四扇窗可能不是同时落地的，落定时车模可能还停在中间状态。
           this.syncWindowStates();
+        } else if (kind === ToggleKind.TRUNK || kind === ToggleKind.TRUNK_LOCK) {
+          // 尾门的开合与锁止是同一批字段，顺手一起补齐。
+          this.syncTrunkLock();
         } else if (kind === ToggleKind.CLIMATE || kind === ToggleKind.PURIFIER) {
           // 空调 / 净化开启后要持续轮询，等车端到时自动关闭时回落按钮
           this.syncClimateTimer();
@@ -1715,8 +1954,16 @@ struct Index {
       const state = await repository.readDomain('exterior', this.vin);
       if (state.tailgateLock === '未锁') {
         this.trunkUnlocked = true;
+        this.trunkLockPhase = TogglePhase.ON;
       } else if (state.tailgateLock === '已锁') {
         this.trunkUnlocked = false;
+        this.trunkLockPhase = TogglePhase.OFF;
+      }
+      // 尾门开合状态也在同一批字段里，一并补齐。
+      if (state.tailgate === '已打开') {
+        this.trunkPhase = TogglePhase.ON;
+      } else if (state.tailgate === '已关闭') {
+        this.trunkPhase = TogglePhase.OFF;
       }
       // 尾门上锁会连带整车上锁，整车锁快捷按钮要跟着落定。
       // 只在状态明确时覆盖 —— 「未知」/「处理中」不改变现有相位。
@@ -1763,6 +2010,8 @@ struct Index {
     if (kind === ToggleKind.PURIFIER) {
       const state = await repository.readDomain('air', this.vin);
       this.airRemainingMinutes = state.airRuntimeMinutes ?? -1;
+      this.airQualityIndex = state.airQualityIndex ?? -1;
+      this.pm25UgM3 = state.pm25UgM3 ?? -1;
       if (state.air === '开启') {
         return TogglePhase.ON;
       }
@@ -1777,8 +2026,10 @@ struct Index {
     // 尾门锁与车锁同在 exterior 域，一次读取即可拿到。
     if (state.tailgateLock === '未锁') {
       this.trunkUnlocked = true;
+      this.trunkLockPhase = TogglePhase.ON;
     } else if (state.tailgateLock === '已锁') {
       this.trunkUnlocked = false;
+      this.trunkLockPhase = TogglePhase.OFF;
     }
     // 车窗开合后逐扇状态会变，同步到车模
     this.windowStates = state.windowStates;
@@ -1788,6 +2039,24 @@ struct Index {
         return TogglePhase.ON;
       }
       if (state.locked === '已锁') {
+        return TogglePhase.OFF;
+      }
+      return undefined;
+    }
+    if (kind === ToggleKind.TRUNK) {
+      if (state.tailgate === '已打开') {
+        return TogglePhase.ON;
+      }
+      if (state.tailgate === '已关闭') {
+        return TogglePhase.OFF;
+      }
+      return undefined;
+    }
+    if (kind === ToggleKind.TRUNK_LOCK) {
+      if (state.tailgateLock === '未锁') {
+        return TogglePhase.ON;
+      }
+      if (state.tailgateLock === '已锁') {
         return TogglePhase.OFF;
       }
       return undefined;
@@ -1941,6 +2210,10 @@ struct Index {
         return this.airPhase;
       case ToggleKind.WINDOW:
         return this.windowPhase;
+      case ToggleKind.TRUNK:
+        return this.trunkPhase;
+      case ToggleKind.TRUNK_LOCK:
+        return this.trunkLockPhase;
       default:
         return TogglePhase.OFF;
     }
@@ -1963,6 +2236,12 @@ struct Index {
       case ToggleKind.WINDOW:
         this.windowPhase = phase;
         break;
+      case ToggleKind.TRUNK:
+        this.trunkPhase = phase;
+        break;
+      case ToggleKind.TRUNK_LOCK:
+        this.trunkLockPhase = phase;
+        break;
       default:
         break;
     }
@@ -1981,6 +2260,10 @@ struct Index {
         return current === TogglePhase.ON ? VehicleCommands.ACTION_AIR_STOP : VehicleCommands.ACTION_AIR_START;
       case ToggleKind.WINDOW:
         return current === TogglePhase.ON ? VehicleCommands.ACTION_WINDOWS_CLOSE : VehicleCommands.ACTION_WINDOWS_OPEN;
+      case ToggleKind.TRUNK:
+        return current === TogglePhase.ON ? VehicleCommands.ACTION_TRUNK_CLOSE : VehicleCommands.ACTION_TRUNK_OPEN;
+      case ToggleKind.TRUNK_LOCK:
+        return current === TogglePhase.ON ? VehicleCommands.ACTION_LOCK_TRUNK : VehicleCommands.ACTION_UNLOCK_TRUNK;
       default:
         return '';
     }
@@ -2277,9 +2560,47 @@ struct Index {
           this.onPullRefresh();
         })
       } else if (this.currentTab === 1) {
-        Control()
-        .width('100%')
-        .layoutWeight(1)
+        Control({
+          campPhase: this.campPhase,
+          campDurationMinutes: this.campDurationMinutes,
+          campRemainingMinutes: this.campRemainingMinutes,
+          campRemainingRatio: this.campRemainingRatio,
+          airPhase: this.airPhase,
+          airAqi: this.airQualityIndex,
+          airPm25: this.pm25UgM3,
+          // 空调与净化互斥：驻车空调在跑时净化开关置灰
+          airDisabled: this.climateActive(),
+          onCampToggle: () => {
+            this.toggleCamp();
+          },
+          onCampDurationChange: (minutes: number) => {
+            this.changeCampDuration(minutes);
+          },
+          onAirToggle: () => {
+            this.toggle(ToggleKind.PURIFIER);
+          },
+          lockPhase: this.lockPhase,
+          trunkLockPhase: this.trunkLockPhase,
+          trunkPhase: this.trunkPhase,
+          windowPhase: this.windowPhase,
+          onLockToggle: () => {
+            this.toggle(ToggleKind.LOCK);
+          },
+          onTrunkLockToggle: () => {
+            this.toggle(ToggleKind.TRUNK_LOCK);
+          },
+          onTrunkToggle: () => {
+            this.toggle(ToggleKind.TRUNK);
+          },
+          onWindowToggle: () => {
+            this.toggle(ToggleKind.WINDOW);
+          },
+          onFindCarAction: (action: string) => {
+            this.honkFlash(action);
+          }
+        })
+          .width('100%')
+          .layoutWeight(1)
       } else {
         Detail()
         .width('100%')

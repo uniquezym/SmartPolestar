@@ -38,7 +38,11 @@ export enum ToggleKind {
   /** 空气净化。 */
   PURIFIER = 'air',
   /** 车窗。 */
-  WINDOW = 'window'
+  WINDOW = 'window',
+  /** 尾门开合（已打开 / 已关闭）。 */
+  TRUNK = 'trunk',
+  /** 尾门锁（已锁 / 未锁）。 */
+  TRUNK_LOCK = 'trunk_lock'
 }
 
 /**

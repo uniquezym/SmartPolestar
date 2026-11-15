@@ -51,6 +51,12 @@ export enum AppIconName {
   WINDOW = 'window',
   /** 空气净化。 */
   AIR = 'air',
+  /** 空气净化（循环箭头）。设计稿控制页卡片图标。 */
+  AIR_CYCLE = 'air_cycle',
+  /** 挂锁（设计稿控制页车辆卡片）。 */
+  LOCK_SIMPLE = 'lock_simple',
+  /** 时钟（运行时长）。 */
+  CLOCK = 'clock',
   /** 向下箭头。 */
   CHEVRON_DOWN = 'chevron_down',
   /** 充电（交流）。填充图标。 */
@@ -170,6 +176,23 @@ const SHAPES: Record<string, IconShape> = {
   [AppIconName.AIR]: {
     path: 'M2,7.5 L11.5,7.5 A3,3 0 1 0 8.5,4.5 M2,12 L16,12 A3,3 0 1 1 13,9 M2,16.5 L10,16.5 A3,3 0 1 1 7,13.5',
     strokeWidth: 1.7
+  },
+  // 空气净化（循环箭头）——设计稿控制页空气净化卡片图标
+  [AppIconName.AIR_CYCLE]: {
+    path: 'M4.5,12 A7.5,7.5 0 1 1 6.7,17.3 M19.5,12 A7.5,7.5 0 1 1 17.3,6.7 ' +
+      'M8,9.5 L5.5,7 L7,4 M16,14.5 L18.5,17 L17,20',
+    strokeWidth: 1.6
+  },
+  // 挂锁（设计稿控制页车辆卡片）—— 无钥匙孔的简洁挂锁
+  [AppIconName.LOCK_SIMPLE]: {
+    path: 'M6.5,10.5 L17.5,10.5 L19.5,12.5 L19.5,18.5 L17.5,20.5 L6.5,20.5 ' +
+      'L4.5,18.5 L4.5,12.5 Z M8,10.5 L8,7 A4,4 0 0 1 16,7 L16,10.5',
+    strokeWidth: 1.6
+  },
+  // 时钟（设计稿 .durrow 的图标）
+  [AppIconName.CLOCK]: {
+    path: 'M12,3.5 A8.5,8.5 0 1 1 11.99,3.5 M12,7 L12,12 L15.2,14',
+    strokeWidth: 1.6
   },
   // Android: ic_chevron_down.xml
   [AppIconName.CHEVRON_DOWN]: {

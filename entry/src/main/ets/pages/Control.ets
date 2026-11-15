@@ -1,29 +1,146 @@
+import { AirPurifyCard } from '../components/AirPurifyCard';
+import { CampModeCard } from '../components/CampModeCard';
+import { FindCarCard } from '../components/FindCarCard';
+import { TogglePhase } from '../components/StateToggle';
+import { VehicleCard } from '../components/VehicleCard';
+
 /**
- * 车辆控制页（占位）。
+ * 车辆控制页。
  *
- * UX 设计尚未定稿，先保留页面骨架与标题，内容待设计确认后实现。
- * 计划包含 6 组控制：车锁 / 尾门 / 车窗 / 驻车空调 / 空气净化 / 寻车。
+ * 对应设计稿 `design/polestar-volvo-ux/index.html` 的 `#p-control`：
+ *   顶栏只有「控制」标题 → 分组卡片（露营模式 / 空气净化 / 车辆 / 寻车）。
+ *
+ * 页面是纯展示层：所有状态由 `Index` 持有并以 props 传入，
+ * 所有操作通过回调上抛，页面本身不下发任何指令。
  */
 @Component
 export struct Control {
+  /** 露营模式阶段（关闭 / 开启 / 验证中 / 执行中）。 */
+  @Prop campPhase: TogglePhase = TogglePhase.OFF;
+  /** 露营模式运行时长（分钟）。 */
+  @Prop campDurationMinutes: number = 60;
+  /** 露营模式剩余时间（分钟），0 表示未开启。 */
+  @Prop campRemainingMinutes: number = 0;
+  /** 剩余时间占全程的比例（0 ~ 1），用于进度条。 */
+  @Prop campRemainingRatio: number = 0;
+
+  /** 空气净化阶段。 */
+  @Prop airPhase: TogglePhase = TogglePhase.OFF;
+  /** AQI 指数，-1 表示未知。 */
+  @Prop airAqi: number = -1;
+  /** PM2.5 浓度（μg/m³），-1 表示未知。 */
+  @Prop airPm25: number = -1;
+  /** 空气净化是否禁用（驻车空调在跑时置灰）。 */
+  @Prop airDisabled: boolean = false;
+
+  /** 整车锁阶段（ON = 未锁）。 */
+  @Prop lockPhase: TogglePhase = TogglePhase.OFF;
+  /** 尾门锁阶段（ON = 未锁）。 */
+  @Prop trunkLockPhase: TogglePhase = TogglePhase.OFF;
+  /** 尾门阶段（ON = 已打开）。 */
+  @Prop trunkPhase: TogglePhase = TogglePhase.OFF;
+  /** 车窗阶段（ON = 车窗开）。 */
+  @Prop windowPhase: TogglePhase = TogglePhase.OFF;
+
+  /** 点击露营模式开关。 */
+  onCampToggle?: () => void;
+  /** 调节运行时长。 */
+  onCampDurationChange?: (minutes: number) => void;
+  /** 点击空气净化开关。 */
+  onAirToggle?: () => void;
+  /** 点击整车锁开关。 */
+  onLockToggle?: () => void;
+  /** 点击尾门锁开关。 */
+  onTrunkLockToggle?: () => void;
+  /** 点击尾门开合开关。 */
+  onTrunkToggle?: () => void;
+  /** 点击全部车窗开关。 */
+  onWindowToggle?: () => void;
+  /** 点击寻车按钮（action = honk / flash / honk-flash）。 */
+  onFindCarAction?: (action: string) => void;
+
   build() {
     Scroll() {
-      Column({ space: 16 }) {
-        Row() {
-          Column({ space: 5 }) {
-            Text('控制')
-              .fontSize(23)
-              .fontWeight(FontWeight.Normal)
-              .fontColor($r('app.color.app_primary_text'))
-            Text('6 类车控能力')
-              .fontSize(11)
-              .fontColor($r('app.color.app_tertiary_text'))
+      Column() {
+        // ---------- 顶栏 ----------
+        Text('控制')
+          .fontSize(23)
+          .fontWeight(FontWeight.Normal)
+          .fontColor($r('app.color.app_primary_text'))
+          .width('100%')
+          .margin({ top: 20, bottom: 22 })
+
+        // ---------- 露营模式 ----------
+        CampModeCard({
+          phase: this.campPhase,
+          durationMinutes: this.campDurationMinutes,
+          remainingMinutes: this.campRemainingMinutes,
+          remainingRatio: this.campRemainingRatio,
+          onToggle: () => {
+            if (this.onCampToggle !== undefined) {
+              this.onCampToggle();
+            }
+          },
+          onDurationChange: (minutes: number) => {
+            if (this.onCampDurationChange !== undefined) {
+              this.onCampDurationChange(minutes);
+            }
           }
-          .alignItems(HorizontalAlign.Start)
-          .layoutWeight(1)
-        }
-        .width('100%')
-        .padding({ top: 20, bottom: 4 })
+        })
+        .margin({ bottom: 11 })
+
+        // ---------- 空气净化 ----------
+        AirPurifyCard({
+          phase: this.airPhase,
+          aqi: this.airAqi,
+          pm25: this.airPm25,
+          disabled: this.airDisabled,
+          onToggle: () => {
+            if (this.onAirToggle !== undefined) {
+              this.onAirToggle();
+            }
+          }
+        })
+        .margin({ bottom: 11 })
+
+        // ---------- 车辆 ----------
+        VehicleCard({
+          lockPhase: this.lockPhase,
+          trunkLockPhase: this.trunkLockPhase,
+          trunkPhase: this.trunkPhase,
+          windowPhase: this.windowPhase,
+          onLockToggle: () => {
+            if (this.onLockToggle !== undefined) {
+              this.onLockToggle();
+            }
+          },
+          onTrunkLockToggle: () => {
+            if (this.onTrunkLockToggle !== undefined) {
+              this.onTrunkLockToggle();
+            }
+          },
+          onTrunkToggle: () => {
+            if (this.onTrunkToggle !== undefined) {
+              this.onTrunkToggle();
+            }
+          },
+          onWindowToggle: () => {
+            if (this.onWindowToggle !== undefined) {
+              this.onWindowToggle();
+            }
+          }
+        })
+        .margin({ bottom: 11 })
+
+        // ---------- 寻车 ----------
+        FindCarCard({
+          onAction: (action: string) => {
+            if (this.onFindCarAction !== undefined) {
+              this.onFindCarAction(action);
+            }
+          }
+        })
+        .margin({ bottom: 11 })
       }
       .width('100%')
       .padding({ left: 18, right: 18 })
