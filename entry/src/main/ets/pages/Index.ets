@@ -451,8 +451,12 @@ struct Index {
       this.climateScheduledDelay = 0;
       this.pollClimate();
     }, delay);
-    Log.info(`空调/净化运行中：安排状态检查，${delay}ms 后`
-      + `（剩余 ${this.climateRemainingMinutes}/${this.airRemainingMinutes} 分钟）`);
+    // 只打印在跑的那一项 —— 车端在功能关闭时仍会返回上一次的剩余时长
+    // （残留值），一起打印会让人误以为两项都在运行。
+    const running = climateOn
+      ? `空调=开启 剩余 ${this.climateRemainingMinutes} 分钟`
+      : `净化=开启 剩余 ${this.airRemainingMinutes} 分钟`;
+    Log.info(`空调/净化运行中：安排状态检查，${delay}ms 后（${running}）`);
   }
 
   /**
@@ -479,7 +483,7 @@ struct Index {
   /**
    * 静默拉一次空调与空气净化状态。
    *
-   * 只读 climate + air 两个域，不触发整页刷新动效。
+   * 只读**在跑的那一项**（空调与净化互斥），不触发整页刷新动效。
    * 这两个功能会到时自动关闭，必须靠状态检查把按钮状态落定。
    */
   private async pollClimate(): Promise<void> {
@@ -491,24 +495,30 @@ struct Index {
     }
     this.climatePolling = true;
     try {
-      const climateState = await this.repository.readDomain('climate', this.vin);
-      const climateWasOn = this.climatePhase === TogglePhase.ON;
-      if (climateState.climate === '开启') {
-        this.climatePhase = TogglePhase.ON;
-      } else if (climateState.climate === '关闭') {
-        this.climatePhase = TogglePhase.OFF;
+      // 空调与净化互斥运行，一次只可能有一项在跑 ——
+      // 只读在跑的那一项，每次检查省掉一个请求。
+      // 万一车端同时报两项在跑，也各自读一次，不能漏掉。
+      if (this.climatePhase === TogglePhase.ON) {
+        const climateState = await this.repository.readDomain('climate', this.vin);
+        if (climateState.climate === '开启') {
+          this.climatePhase = TogglePhase.ON;
+        } else if (climateState.climate === '关闭') {
+          this.climatePhase = TogglePhase.OFF;
+          this.publishCard();
+        }
+        this.climateRemainingMinutes = climateState.climateRuntimeMinutes ?? -1;
+        this.climate = climateState.climate;
       }
-      this.climateRemainingMinutes = climateState.climateRuntimeMinutes ?? -1;
-      this.climate = climateState.climate;
-
-      const airState = await this.repository.readDomain('air', this.vin);
-      const airWasOn = this.airPhase === TogglePhase.ON;
-      if (airState.air === '开启') {
-        this.airPhase = TogglePhase.ON;
-      } else if (airState.air === '关闭') {
-        this.airPhase = TogglePhase.OFF;
+      if (this.airPhase === TogglePhase.ON) {
+        const airState = await this.repository.readDomain('air', this.vin);
+        if (airState.air === '开启') {
+          this.airPhase = TogglePhase.ON;
+        } else if (airState.air === '关闭') {
+          this.airPhase = TogglePhase.OFF;
+          this.publishCard();
+        }
+        this.airRemainingMinutes = airState.airRuntimeMinutes ?? -1;
       }
-      this.airRemainingMinutes = airState.airRuntimeMinutes ?? -1;
 
       const now = Date.now();
       const stillOn = this.climatePhase === TogglePhase.ON || this.airPhase === TogglePhase.ON;
@@ -521,12 +531,6 @@ struct Index {
         this.climateEndgameCount++;
       } else {
         this.climateEndgameCount = 0;
-      }
-
-      // 状态有变化时同步桌面卡片 —— 空调/净化停了，卡片文案也要跟着改。
-      if (climateWasOn !== (this.climatePhase === TogglePhase.ON) ||
-        airWasOn !== (this.airPhase === TogglePhase.ON)) {
-        this.publishCard();
       }
     } catch (err) {
       const e = err as BusinessError;
