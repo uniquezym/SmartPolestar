@@ -9,6 +9,7 @@ import { AppIcon, AppIconName } from './Icons';
  *
  * 三个阶段：
  *   关闭   —— 透明底 + 灰图标 + 灰标签
+ *   验证中 —— 蓝边 + 半透明图标 + 蓝色「验证中」标签，指令尚未下发
  *   执行中 —— 蓝边 + 旋转指示器 + 蓝色「执行中」标签，禁止重复下发
  *   开启   —— 品牌蓝实底 + 白图标 + 蓝色标签 + 呼吸光晕
  *
@@ -21,7 +22,9 @@ export enum TogglePhase {
   /** 执行中，等待车端响应。 */
   PENDING = 1,
   /** 稳定开启态。 */
-  ON = 2
+  ON = 2,
+  /** 等待指纹验证，指令尚未下发。 */
+  VERIFYING = 3
 }
 
 /**
@@ -112,6 +115,9 @@ export struct StateToggle {
    * 当前状态文案（标签显示的文字）。
    */
   private stateText(): string {
+    if (this.phase === TogglePhase.VERIFYING) {
+      return '验证中';
+    }
     if (this.phase === TogglePhase.PENDING) {
       return '执行中';
     }
@@ -173,7 +179,10 @@ export struct StateToggle {
               ? $r('app.color.app_accent')
               : $r('app.color.app_secondary_text'))
         })
-        .opacity(this.phase === TogglePhase.PENDING ? 0 : 1)
+        // 验证中：图标保留但半透明，与执行中的转圈区分开
+        .opacity(this.phase === TogglePhase.PENDING
+          ? 0
+          : (this.phase === TogglePhase.VERIFYING ? 0.35 : 1))
         .animation({ duration: 180, curve: Curve.EaseOut, iterations: 1 })
 
         // 执行中：旋转指示器
@@ -205,7 +214,9 @@ export struct StateToggle {
     }
     .alignItems(HorizontalAlign.Center)
     .onClick(() => {
-      if (this.phase === TogglePhase.PENDING || this.disabled) {
+      if (this.phase === TogglePhase.PENDING ||
+        this.phase === TogglePhase.VERIFYING ||
+        this.disabled) {
         return;
       }
       if (this.onTap !== undefined) {

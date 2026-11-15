@@ -277,14 +277,6 @@ export struct VehiclePlan {
           .stroke(Color.Transparent)
           .width(`${this.viewW}px`)
           .height(`${this.viewH}px`)
-          .onClick(() => {
-            if (this.trunkBusy) {
-              return;
-            }
-            if (this.onTrunkTap !== undefined) {
-              this.onTrunkTap();
-            }
-          })
 
         Path({ commands: 'M22,76 L39,76 L39,122 L22,122 Z M161,76 L178,76 L178,122 L161,122 Z' })
           .fill($r('app.color.app_surface_sunken'))
@@ -441,6 +433,24 @@ export struct VehiclePlan {
           .fill($r('app.color.app_primary_text'))
           .width(`${this.viewW}px`)
           .height(`${this.viewH}px`)
+
+        // 尾门热区：透明 Path，承载点击。
+        // 必须放在这个 Stack 的**最后**（最上层）—— 车身轮廓、尾灯、
+        // 内部分隔线虽然 fill 透明，仍会按几何形状参与命中测试并吃掉
+        // 点击，垫在它们下面就点不到尾门板。
+        Path({ commands: 'M39 254 L161 254 C161 294 142 328 100 328 C58 328 39 298 39 254 Z' })
+          .fill(Color.Transparent)
+          .stroke(Color.Transparent)
+          .width(`${this.viewW}px`)
+          .height(`${this.viewH}px`)
+          .onClick(() => {
+            if (this.trunkBusy) {
+              return;
+            }
+            if (this.onTrunkTap !== undefined) {
+              this.onTrunkTap();
+            }
+          })
       }
       .width(`${this.viewW}px`)
       .height(`${this.viewH}px`)
@@ -461,8 +471,8 @@ export struct VehiclePlan {
       Stack({ alignContent: Alignment.Center }) {
         if (this.trunkBusy) {
           LoadingProgress()
-            .width(13)
-            .height(13)
+            .width(24)
+            .height(24)
             .color($r('app.color.app_accent'))
         } else if (this.trunkUnlocked) {
           AppIcon({
@@ -472,9 +482,12 @@ export struct VehiclePlan {
           })
         }
       }
-      .width(26)
-      .height(26)
-      .position({ x: 87, y: 278 })
+      .width(34)
+      .height(34)
+      .position({ x: 83, y: 274 })
+      // 指示器浮在尾门热区之上，必须让出命中测试，
+      // 否则这 34×34 的透明区域会把尾门点击吃掉。
+      .hitTestBehavior(HitTestMode.Transparent)
 
       // 说明文字
       Text('机盖').fontSize(9).fontColor($r('app.color.app_tertiary_text'))

@@ -1125,22 +1125,26 @@ struct Index {
 
     // 记录点击前的阶段，失败时回滚
     const prev = this.phaseOf(kind);
-    this.setPhase(kind, TogglePhase.PENDING);
 
     // 目标动作：由当前阶段决定
     const action = this.actionOf(kind, prev);
 
     // 高安全性操作（整车解锁、开窗）先过指纹门禁，再下发指令。
+    // 验证期间用「验证中」态提示用户点了哪个按钮，
+    // 但不显示执行动画 —— 指令尚未下发，不能让用户以为已经在执行。
     if (this.requiresFingerprint(kind, action)) {
+      this.setPhase(kind, TogglePhase.VERIFYING);
       this.guardByFingerprint(action, () => {
+        this.setPhase(kind, TogglePhase.PENDING);
         this.dispatchToggle(kind, action, prev);
       }, () => {
-        // 指纹未通过：不发送指令，开关状态回滚到点击前
+        // 指纹未通过：不发送指令，开关状态保持点击前
         this.setPhase(kind, prev);
       });
       return;
     }
 
+    this.setPhase(kind, TogglePhase.PENDING);
     this.dispatchToggle(kind, action, prev);
   }
 
@@ -1375,6 +1379,9 @@ struct Index {
    *
    * 整车解锁 / 锁定会连带改变尾门锁，但车端不一定同时推送两个状态，
    * 需要额外读一次才能拿到准确的尾门锁状态。
+   *
+   * 同时同步整车锁：上锁尾门会把整车一并上锁，
+   * 若不同步，整车锁快捷按钮会停在「未锁」的旧状态。
    */
   private async syncTrunkLock(): Promise<void> {
     const repository = this.repository;
@@ -1388,8 +1395,17 @@ struct Index {
       } else if (state.tailgateLock === '已锁') {
         this.trunkUnlocked = false;
       }
+      // 尾门上锁会连带整车上锁，整车锁快捷按钮要跟着落定。
+      // 只在状态明确时覆盖 —— 「未知」/「处理中」不改变现有相位。
+      if (state.locked === '未锁') {
+        this.lockPhase = TogglePhase.ON;
+      } else if (state.locked === '已锁') {
+        this.lockPhase = TogglePhase.OFF;
+      }
       this.windowStates = state.windowStates;
       this.doorStates = state.doorStates;
+      // 尾门状态变了，桌面卡片上的锁车文案也要跟着更新
+      this.publishCard();
     } catch (err) {
       Log.warn(`同步尾门锁状态失败: ${(err as Error).message}`);
     }
@@ -1573,7 +1589,9 @@ struct Index {
           return;
         }
         this.trunkUnlocked = !wasUnlocked;
-        this.refresh();
+        // 只读 exterior 域确认尾门锁状态，不做全量刷新 ——
+        // 全量刷新会让右上角出现刷新动画，且多拉 5 个无关域。
+        this.syncTrunkLock();
       });
     } catch (err) {
       const e = err as BusinessError;
