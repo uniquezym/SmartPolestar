@@ -266,6 +266,26 @@ export struct VehiclePlan {
     Stack({ alignContent: Alignment.TopStart }) {
       // ---------- 车身线稿（Path 盒子为 px 尺寸，与路径坐标 1:1） ----------
       Stack({ alignContent: Alignment.TopStart }) {
+        // 尾门板：车身尾部的半圆区域（y=254 分割线以下、到车尾弧线）。
+        // 填充色表达尾门锁状态，与车窗、车门同一套语言。
+        // 画在车身轮廓之前 —— 否则填充会盖掉车身弧线的描边。
+        // 上边界是已有的 M39 254h122 分隔线，底边与车身弧线重合。
+        // 必须显式 stroke(Transparent)：Path 默认描边是黑色，
+        // 不关掉的话封闭路径的顶部横线会多出一道黑边。
+        Path({ commands: 'M39 254 L161 254 C161 294 142 328 100 328 C58 328 39 298 39 254 Z' })
+          .fill(this.trunkUnlocked ? $r('app.color.app_trunk_open_fill') : Color.Transparent)
+          .stroke(Color.Transparent)
+          .width(`${this.viewW}px`)
+          .height(`${this.viewH}px`)
+          .onClick(() => {
+            if (this.trunkBusy) {
+              return;
+            }
+            if (this.onTrunkTap !== undefined) {
+              this.onTrunkTap();
+            }
+          })
+
         Path({ commands: 'M22,76 L39,76 L39,122 L22,122 Z M161,76 L178,76 L178,122 L161,122 Z' })
           .fill($r('app.color.app_surface_sunken'))
           .stroke($r('app.color.app_card_border'))
@@ -434,37 +454,27 @@ export struct VehiclePlan {
         this.marker(new PlanMarker(52, 238, '口', this.portOpen))
       }
 
-      // 尾门标记点：可点击，解锁后走警示色，执行中显示蓝色描边与转圈
+      // 尾门状态指示：不再是「尾」字圆点（既是状态又是按钮，语义双重）。
+      // 尾门板本身承担热区与状态，这里只叠加一个轻量指示：
+      //   已解锁 → 锁图标（提示「当前是解锁态，点一下会上锁」）
+      //   执行中 → 转圈（填充色保持原状态不变，只用动效表达进行中）
       Stack({ alignContent: Alignment.Center }) {
         if (this.trunkBusy) {
           LoadingProgress()
             .width(13)
             .height(13)
             .color($r('app.color.app_accent'))
-        } else {
-          Text('尾')
-            .fontSize(9)
-            .fontColor(this.trunkUnlocked
-              ? $r('app.color.app_on_accent')
-              : $r('app.color.app_tertiary_text'))
+        } else if (this.trunkUnlocked) {
+          AppIcon({
+            name: AppIconName.LOCK_OPEN,
+            iconSize: 13,
+            color: $r('app.color.app_trunk_open_stroke')
+          })
         }
       }
       .width(26)
       .height(26)
-      .borderRadius(13)
-      .backgroundColor(this.trunkUnlocked ? $r('app.color.app_warn') : $r('app.color.app_surface'))
-      .border({ width: 1.2, color: this.trunkBusy
-        ? $r('app.color.app_accent')
-        : (this.trunkUnlocked ? $r('app.color.app_warn') : $r('app.color.app_card_border')) })
-      .position({ x: 87, y: 249 })
-      .onClick(() => {
-        if (this.trunkBusy) {
-          return;
-        }
-        if (this.onTrunkTap !== undefined) {
-          this.onTrunkTap();
-        }
-      })
+      .position({ x: 87, y: 278 })
 
       // 说明文字
       Text('机盖').fontSize(9).fontColor($r('app.color.app_tertiary_text'))

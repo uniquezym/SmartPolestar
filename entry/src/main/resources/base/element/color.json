@@ -81,6 +81,14 @@
       "value": "#F6E9D6"
     },
     {
+      "name": "app_trunk_open_fill",
+      "value": "#F6E9D6"
+    },
+    {
+      "name": "app_trunk_open_stroke",
+      "value": "#9A5609"
+    },
+    {
       "name": "app_ok",
       "value": "#1D6B45"
     },
