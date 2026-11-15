@@ -2,6 +2,7 @@
   "src": [
     "pages/Index",
     "pages/Login",
-    "pages/Map"
+    "pages/Map",
+    "pages/CardControl"
   ]
 }

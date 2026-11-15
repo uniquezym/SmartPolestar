@@ -2,7 +2,7 @@ import { common, abilityAccessCtrl } from '@kit.AbilityKit';
 import { VehicleRepository } from '../core/vehicle/VehicleRepository';
 import { ControlCoordinator } from '../core/vehicle/ControlCoordinator';
 import { VehicleCommands } from '../core/net/VehicleCommands';
-import { VehicleState, ChargeStage } from '../core/model/VehicleState';
+import { VehicleState, ChargeStage, ChargeStageResolver } from '../core/model/VehicleState';
 import { AppIcon, AppIconName } from '../components/Icons';
 import { StateToggle, ToggleKind, TogglePhase } from '../components/StateToggle';
 import { VehiclePlan } from '../components/VehiclePlan';
@@ -11,6 +11,8 @@ import { Control } from './Control';
 import { Detail } from './Detail';
 import { PlaceResolver } from '../core/vehicle/PlaceResolver';
 import { MapLauncher } from '../core/vehicle/MapLauncher';
+import { CardPublisher } from '../core/vehicle/CardPublisher';
+import { BiometricGuard, BiometricResult } from '../core/vehicle/BiometricGuard';
 import { SessionStore } from '../core/session/SessionStore';
 import { BusinessError, Log } from '../common/Log';
 
@@ -75,6 +77,8 @@ struct Index {
 
   @State locked: string = '—';
   @State windows: string = '—';
+  /** 驻车空调状态文案。卡片快照需要它。 */
+  @State climate: string = '未知';
   @State odometerKm: number = -1;
   @State tripManualKm: number = -1;
   @State tripAutomaticKm: number = -1;
@@ -93,6 +97,8 @@ struct Index {
   @State automaticEnergyWh: number = -1;
   @State sinceChargeEnergyWh: number = -1;
   @State parkedTime: string = '—';
+  /** 停车时刻（epoch millis），用于文案定时刷新。 */
+  @State parkedTimestamp: number = 0;
   @State parkedCoordinate: string = '';
   /** 停车地点名（经纬度反查结果）。解析中时为空串。 */
   @State parkedPlace: string = '';
@@ -158,7 +164,8 @@ struct Index {
    * 启动「距上次刷新」文案的定时更新。
    *
    * 对齐原版 MainActivity 的 30 秒定时任务（s00 case 1）：只重算文案，
-   * 不打接口。这样「5 分钟前」会自己跳到「10 分钟前」。
+   * 不打接口。这样「5 分钟前」会自己跳到「10 分钟前」，
+   * 「最后停车位置」的「X 小时前」同理。
    *
    * 刷新进行中（loading / refreshing）时冻结文案，等刷新完成后统一更新。
    */
@@ -173,11 +180,16 @@ struct Index {
   }
 
   /**
-   * 重算「距上次刷新」文案。
+   * 重算「距上次刷新」文案与「最后停车位置」的时间文案。
+   *
+   * 两处都只做文案换算，不打接口。
    */
   private refreshText(): void {
     if (this.lastRefreshAt > 0) {
       this.lastRefreshText = Index.formatElapsed(this.lastRefreshAt, Date.now());
+    }
+    if (this.parkedTimestamp > 0) {
+      this.parkedTime = this.formatParkedTime(this.parkedTimestamp);
     }
   }
 
@@ -273,6 +285,8 @@ struct Index {
       this.powerWatts = state.powerWatts ?? 0;
       this.currentAmps = state.currentAmps ?? 0;
       this.remainingMinutes = state.timeToFullMinutes ?? 0;
+      // 充电中电量在变，卡片也要跟着更新
+      this.publishCard();
     } catch (err) {
       const e = err as BusinessError;
       // 静默失败：轮询出错不该打扰用户，也不该把整页刷成错误态
@@ -433,6 +447,8 @@ struct Index {
       this.applyState(states[0]);
       // 记录刷新时刻，供「距上次刷新」文案使用
       this.markRefreshed();
+      // 把状态同步到桌面卡片
+      this.publishCard();
     } catch (err) {
       const e = err as BusinessError;
       if (e.code === 401) {
@@ -451,6 +467,26 @@ struct Index {
         this.refreshText();
       }
     }
+  }
+
+  /**
+   * 把当前状态同步到桌面卡片。
+   *
+   * 失败不影响主流程 —— 卡片只是状态的一个出口，
+   * 不该因为推送失败而让整页刷新报错。
+   */
+  private publishCard(): void {
+    const context = this.context;
+    if (context === undefined || this.vin.length === 0) {
+      return;
+    }
+    const snapshot = CardPublisher.snapshot(
+      this.vin, this.modelName, this.battery, this.range,
+      this.charging, this.chargerConnection, this.powerWatts, this.currentAmps,
+      this.remainingMinutes, this.locked, this.climate);
+    CardPublisher.publish(context, snapshot).catch((err: Error) => {
+      Log.warn(`同步卡片失败: ${err.message}`);
+    });
   }
 
   /**
@@ -566,6 +602,7 @@ struct Index {
 
     this.locked = state.locked;
     this.windows = state.windows;
+    this.climate = state.climate;
 
     this.odometerKm = state.odometerKm ?? -1;
     this.tripManualKm = state.tripManualKm ?? -1;
@@ -582,6 +619,7 @@ struct Index {
     this.sinceChargeEnergyWh = state.tripSinceChargeEnergyWh ?? -1;
 
     if (state.parkedTimestamp !== undefined && state.parkedTimestamp > 0) {
+      this.parkedTimestamp = state.parkedTimestamp;
       this.parkedTime = this.formatParkedTime(state.parkedTimestamp);
     }
     // 停车坐标变化时重新反查地点名
@@ -689,42 +727,11 @@ struct Index {
   /**
    * 统一的充电阶段。
    *
-   * 协议里有两组独立状态：充电枪连接状态（chargerConnection）与
-   * 充电状态（charging）。两者组合起来才是用户真正关心的一句话，
-   * 因此归一成单一阶段，UI 只认这个枚举。
-   *
-   * 判定按优先级从上到下，命中即返回：
-   *   1. 充电中 / 智能充电   → 充电中
-   *   2. 放电中              → 放电中
-   *   3. 已完成              → 已完成
-   *   4. 充电错误 / 连接故障 → 故障
-   *   5. 智能充电暂停        → 已暂停
-   *   6. 充电枪已连接        → 已插枪
-   *   7. 其余                → 未充电
-   *
-   * 「已完成」排在「已连接」之前 —— 充满后枪还插着，
-   * 这时用户关心的是「已充满」，而不是「插着枪」。
+   * 判定规则集中在 ChargeStageResolver，主应用与桌面卡片共用同一套，
+   * 避免两边显示的充电状态不一致。
    */
   private chargeStage(): ChargeStage {
-    if (this.isCharging()) {
-      return ChargeStage.CHARGING;
-    }
-    if (this.charging === '放电中') {
-      return ChargeStage.DISCHARGING;
-    }
-    if (this.charging === '已完成') {
-      return ChargeStage.COMPLETED;
-    }
-    if (this.charging === '错误' || this.chargerConnection === '连接故障') {
-      return ChargeStage.FAULT;
-    }
-    if (this.charging === '智能充电暂停') {
-      return ChargeStage.PAUSED;
-    }
-    if (this.chargerConnection === '已连接') {
-      return ChargeStage.PLUGGED;
-    }
-    return ChargeStage.IDLE;
+    return ChargeStageResolver.resolve(this.charging, this.chargerConnection);
   }
 
   /**
@@ -1116,20 +1123,43 @@ struct Index {
       return;
     }
 
-    const ctx = this.context;
-    const client = this.repository?.getClient();
-    const session = this.repository?.getSession();
-    if (ctx === undefined || client === undefined || session === undefined) {
-      this.errorMessage = '会话未就绪，请重试';
-      return;
-    }
-
     // 记录点击前的阶段，失败时回滚
     const prev = this.phaseOf(kind);
     this.setPhase(kind, TogglePhase.PENDING);
 
     // 目标动作：由当前阶段决定
     const action = this.actionOf(kind, prev);
+
+    // 高安全性操作（整车解锁、开窗）先过指纹门禁，再下发指令。
+    if (this.requiresFingerprint(kind, action)) {
+      this.guardByFingerprint(action, () => {
+        this.dispatchToggle(kind, action, prev);
+      }, () => {
+        // 指纹未通过：不发送指令，开关状态回滚到点击前
+        this.setPhase(kind, prev);
+      });
+      return;
+    }
+
+    this.dispatchToggle(kind, action, prev);
+  }
+
+  /**
+   * 下发开关指令并轮询确认车端状态。
+   *
+   * @param kind   开关语义类型
+   * @param action 已确定的动作
+   * @param prev   点击前的阶段，失败时回滚用
+   */
+  private async dispatchToggle(kind: ToggleKind, action: string, prev: TogglePhase): Promise<void> {
+    const ctx = this.context;
+    const client = this.repository?.getClient();
+    const session = this.repository?.getSession();
+    if (ctx === undefined || client === undefined || session === undefined) {
+      this.errorMessage = '会话未就绪，请重试';
+      this.setPhase(kind, prev);
+      return;
+    }
 
     try {
       const coordinator = new ControlCoordinator(ctx, session, client);
@@ -1149,6 +1179,110 @@ struct Index {
       this.setPhase(kind, prev);
       Log.error(`车控执行异常: ${e.message}`);
     }
+  }
+
+  /**
+   * 判断该动作是否需要指纹验证。
+   *
+   * 只覆盖「打开」方向的动作 —— 解锁、开窗会降低车辆的物理防护，
+   * 上锁与关窗是恢复安全状态的方向，不需要额外门禁。
+   *
+   * @param kind   开关语义类型
+   * @param action 已确定的动作
+   */
+  private requiresFingerprint(kind: ToggleKind, action: string): boolean {
+    if (kind === ToggleKind.LOCK) {
+      return action === VehicleCommands.ACTION_UNLOCK;
+    }
+    if (kind === ToggleKind.WINDOW) {
+      return action === VehicleCommands.ACTION_WINDOWS_OPEN;
+    }
+    return false;
+  }
+
+  /**
+   * 指纹门禁：通过则执行回调；不可用时降级为二次确认框。
+   *
+   * 降级策略与卡片车控一致（Android 原版 WidgetControlActivity.m485p）：
+   * 说明指纹不可用的原因 + 列出将执行的操作，由用户确认后放行。
+   *
+   * @param action    将要执行的动作
+   * @param onProceed 放行后执行
+   * @param onReject  指纹未通过 / 用户取消时执行
+   */
+  private guardByFingerprint(action: string, onProceed: () => void, onReject: () => void): void {
+    BiometricGuard.checkAvailable().then((capability: number) => {
+      if (capability !== BiometricResult.SUCCESS) {
+        this.confirmWithoutFingerprint(action, BiometricGuard.fallbackMessage(capability), onProceed, onReject);
+        return;
+      }
+      BiometricGuard.verify(this.fingerprintTitle(action)).then((result: number) => {
+        if (result !== BiometricResult.SUCCESS) {
+          this.toast('未通过指纹验证，未发送车辆指令');
+          onReject();
+          return;
+        }
+        onProceed();
+      });
+    });
+  }
+
+  /**
+   * 指纹验证弹窗标题。
+   */
+  private fingerprintTitle(action: string): string {
+    if (action === VehicleCommands.ACTION_UNLOCK) {
+      return '验证以解锁车辆';
+    }
+    if (action === VehicleCommands.ACTION_UNLOCK_TRUNK) {
+      return '验证以解锁尾门';
+    }
+    return '验证以打开车窗';
+  }
+
+  /**
+   * 指纹不可用时的降级确认框。
+   *
+   * @param action    将要执行的动作
+   * @param reason    指纹不可用的原因
+   * @param onProceed 用户确认后执行
+   * @param onReject  用户取消时执行
+   */
+  private confirmWithoutFingerprint(action: string, reason: string,
+    onProceed: () => void, onReject: () => void): void {
+    this.getUIContext().showAlertDialog({
+      title: '指纹验证不可用',
+      message: `${reason}\n\n确认后将执行以下车辆操作：\n${this.actionLabel(action)}`,
+      primaryButton: {
+        value: '取消',
+        action: () => {
+          onReject();
+        }
+      },
+      secondaryButton: {
+        value: '确认并执行',
+        fontColor: $r('app.color.app_polar'),
+        action: () => {
+          onProceed();
+        }
+      }
+    });
+  }
+
+  /**
+   * 动作的中文描述，用于确认框文案。
+   */
+  private actionLabel(action: string): string {
+    if (action === VehicleCommands.ACTION_UNLOCK) {
+      return '解锁车辆';
+    }
+    if (action === VehicleCommands.ACTION_UNLOCK_TRUNK) {
+      return '解锁尾门';
+    }
+    if (action === VehicleCommands.ACTION_WINDOWS_OPEN) {
+      return '打开全部车窗';
+    }
+    return action;
   }
 
   /**
@@ -1397,6 +1531,29 @@ struct Index {
       return;
     }
 
+    const wasUnlocked = this.trunkUnlocked;
+    const action = wasUnlocked ? VehicleCommands.ACTION_LOCK_TRUNK : VehicleCommands.ACTION_UNLOCK_TRUNK;
+
+    // 尾门解锁同样是「打开」方向的高安全性操作，先过指纹门禁。
+    if (action === VehicleCommands.ACTION_UNLOCK_TRUNK) {
+      this.guardByFingerprint(action, () => {
+        this.dispatchTrunk(action, wasUnlocked);
+      }, () => {
+        this.trunkUnlocked = wasUnlocked;
+      });
+      return;
+    }
+
+    this.dispatchTrunk(action, wasUnlocked);
+  }
+
+  /**
+   * 下发尾门指令。
+   *
+   * @param action      已确定的动作
+   * @param wasUnlocked 点击前的尾门锁状态，失败时回滚用
+   */
+  private async dispatchTrunk(action: string, wasUnlocked: boolean): Promise<void> {
     const ctx = this.context;
     const client = this.repository?.getClient();
     const session = this.repository?.getSession();
@@ -1404,9 +1561,6 @@ struct Index {
       this.errorMessage = '会话未就绪，请重试';
       return;
     }
-
-    const wasUnlocked = this.trunkUnlocked;
-    const action = wasUnlocked ? VehicleCommands.ACTION_LOCK_TRUNK : VehicleCommands.ACTION_UNLOCK_TRUNK;
     this.trunkBusy = true;
 
     try {

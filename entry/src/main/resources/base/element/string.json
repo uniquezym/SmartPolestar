@@ -13,6 +13,14 @@
       "value": "极星2"
     },
     {
+      "name": "CardFormAbility_label",
+      "value": "极星2 车况"
+    },
+    {
+      "name": "CardFormAbility_desc",
+      "value": "极星2 桌面卡片"
+    },
+    {
       "name": "login_title",
       "value": "登录极星账号"
     },

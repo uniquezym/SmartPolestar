@@ -161,7 +161,7 @@ export const CHARGER_POWER_LABELS: string[] = ['未知', '无电源', '初始化
  * 充电状态（charging）。两者组合起来才是用户真正关心的一句话，
  * 因此在这里归一成单一阶段，UI 只认这个枚举。
  *
- * 判定优先级见 Index.chargeStage()。
+ * 判定规则见 VehicleState.chargeStageOf()。
  */
 export enum ChargeStage {
   /** 未充电：没插枪，也没有充电在进行。 */
@@ -178,6 +178,103 @@ export enum ChargeStage {
   DISCHARGING = 'discharging',
   /** 故障：充电错误或充电枪连接故障。 */
   FAULT = 'fault'
+}
+
+/**
+ * 充电阶段判定的辅助方法。
+ *
+ * 放在模型层是为了让主应用与桌面卡片共用同一套规则 —— 两边显示的
+ * 「充电中 / 已完成 / 已连接」必须完全一致，否则会出现卡片说已充满、
+ * 应用里还在转圈的情况。
+ */
+export class ChargeStageResolver {
+  /**
+   * 由充电状态与充电枪连接状态推出统一的充电阶段。
+   *
+   * 判定按优先级从上到下，命中即返回：
+   *   1. 充电中 / 智能充电   → 充电中
+   *   2. 放电中              → 放电中
+   *   3. 已完成              → 已完成
+   *   4. 充电错误 / 连接故障 → 故障
+   *   5. 智能充电暂停        → 已暂停
+   *   6. 充电枪已连接        → 已插枪
+   *   7. 其余                → 未充电
+   *
+   * 「已完成」排在「已连接」之前 —— 充满后枪还插着，
+   * 这时用户关心的是「已充满」，而不是「插着枪」。
+   */
+  static resolve(charging: string, chargerConnection: string): ChargeStage {
+    if (charging === '充电中' || charging === '智能充电') {
+      return ChargeStage.CHARGING;
+    }
+    if (charging === '放电中') {
+      return ChargeStage.DISCHARGING;
+    }
+    if (charging === '已完成') {
+      return ChargeStage.COMPLETED;
+    }
+    if (charging === '错误' || chargerConnection === '连接故障') {
+      return ChargeStage.FAULT;
+    }
+    if (charging === '智能充电暂停') {
+      return ChargeStage.PAUSED;
+    }
+    if (chargerConnection === '已连接') {
+      return ChargeStage.PLUGGED;
+    }
+    return ChargeStage.IDLE;
+  }
+
+  /**
+   * 充电阶段的简短文案，用于卡片与电量区的 inline 说明。
+   *
+   * @param stage        充电阶段
+   * @param powerWatts   充电功率（瓦）
+   * @param currentAmps  充电电流（安）
+   * @param remainingMin 充满剩余时长（分钟）
+   */
+  static text(stage: ChargeStage, powerWatts: number, currentAmps: number,
+    remainingMin: number): string {
+    switch (stage) {
+      case ChargeStage.IDLE:
+        return '';
+      case ChargeStage.DISCHARGING:
+        return '放电中';
+      case ChargeStage.COMPLETED:
+        return '已完成';
+      case ChargeStage.FAULT:
+        return '充电错误';
+      case ChargeStage.PAUSED:
+        return '已暂停';
+      case ChargeStage.PLUGGED:
+        return '已连接';
+      default:
+        break;
+    }
+    // 充电中：功率 · 电流 · 充满剩余时长
+    const parts: string[] = [];
+    if (powerWatts >= 1000) {
+      parts.push(`${(powerWatts / 1000).toFixed(1)} kW`);
+    } else if (powerWatts > 0) {
+      parts.push(`${powerWatts} W`);
+    }
+    if (currentAmps > 0) {
+      parts.push(`${Math.round(currentAmps)} A`);
+    }
+    if (remainingMin > 0) {
+      if (remainingMin < 60) {
+        parts.push(`约 ${remainingMin} 分钟`);
+      } else {
+        const h = Math.floor(remainingMin / 60);
+        const m = remainingMin % 60;
+        parts.push(m === 0 ? `约 ${h} 小时` : `约 ${h} 小时 ${m} 分`);
+      }
+    }
+    if (parts.length === 0) {
+      return '充电中';
+    }
+    return parts.join(' · ');
+  }
 }
 
 /**

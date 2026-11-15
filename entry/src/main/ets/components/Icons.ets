@@ -247,7 +247,10 @@ export struct AppIcon {
   private density: number = 3;
 
   aboutToAppear(): void {
-    this.density = this.getUIContext().vp2px(1);
+    // 卡片渲染进程（formrenderservice）里组件尚未挂到 UIContext，
+    // this.getUIContext() 返回 undefined 会抛异常导致图标不渲染。
+    // 全局 vp2px() 标注了 @form，官方支持卡片场景，无 UI 实例时回退默认屏幕比例。
+    this.density = vp2px(1);
   }
 
   /**

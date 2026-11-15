@@ -46,6 +46,20 @@
             "resource": "$profile:backup_config"
           },
         ],
+      },
+      {
+        "name": "CardFormAbility",
+        "srcEntry": "./ets/entryability/form/CardFormAbility.ets",
+        "label": "$string:CardFormAbility_label",
+        "description": "$string:CardFormAbility_desc",
+        "type": "form",
+        "exported": true,
+        "metadata": [
+          {
+            "name": "ohos.extension.form",
+            "resource": "$profile:form_config"
+          }
+        ]
       }
     ],
     "requestPermissions": [

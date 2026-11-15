@@ -1,0 +1,23 @@
+{
+  "forms": [
+    {
+      "name": "CardFormAbility",
+      "displayName": "极星2 车况",
+      "description": "剩余电量、预计续航与充电信息，并可控制整车锁与驻车空调",
+      "src": "./ets/entryability/form/CardPage.ets",
+      "uiSyntax": "arkts",
+      "isDynamic": true,
+      "isDefault": true,
+      "colorMode": "auto",
+      "updateEnabled": true,
+      "updateDuration": 1,
+      "defaultDimension": "2*4",
+      "supportDimensions": [
+        "2*4"
+      ],
+      "supportDeviceTypes": [
+        "phone"
+      ]
+    }
+  ]
+}
