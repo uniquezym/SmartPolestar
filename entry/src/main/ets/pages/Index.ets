@@ -225,6 +225,8 @@ struct Index {
   private airExpectedEnd: number = 0;
   /** 连续多少次检查落在预计结束时刻之后仍报「开启」。 */
   private climateEndgameCount: number = 0;
+  /** 连续多少次状态检查失败。失败时要退避，不能一直高频重试。 */
+  private climateFailCount: number = 0;
 
   aboutToAppear(): void {
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -433,6 +435,15 @@ struct Index {
     if (this.climateEndgameCount >= Index.CLIMATE_CHECK_ENDGAME_LIMIT) {
       delay = Index.CLIMATE_CHECK_MAX_INTERVAL_MS;
     }
+    // 连续失败时退避 —— 鉴权失败或断网时若还按 15 秒一轮重试，
+    // 等于对着故障接口高频空打，白白浪费请求也拖慢恢复。
+    if (this.climateFailCount > 0) {
+      const backoff = Math.min(
+        Index.CLIMATE_CHECK_MAX_INTERVAL_MS,
+        Index.CLIMATE_CHECK_OVERDUE_MS * Math.pow(2, this.climateFailCount - 1)
+      );
+      delay = Math.max(delay, backoff);
+    }
 
     // 间隔没变就不用重排 —— 空调与净化常常在同一秒结束，
     // 重排会白白丢掉已排好的检查点。
@@ -476,6 +487,7 @@ struct Index {
   private stopClimateTimer(): void {
     this.clearClimateSchedule();
     this.climateEndgameCount = 0;
+    this.climateFailCount = 0;
     this.climateExpectedEnd = 0;
     this.airExpectedEnd = 0;
   }
@@ -523,6 +535,9 @@ struct Index {
       const now = Date.now();
       const stillOn = this.climatePhase === TogglePhase.ON || this.airPhase === TogglePhase.ON;
 
+      // 读到了 —— 失败计数清零
+      this.climateFailCount = 0;
+
       // 到了预计结束时刻仍报「开启」——车端没在倒计时（或用户手动续时），
       // 连续几次之后改用兜底间隔，避免高频空转。
       const pastDeadline = (this.climateExpectedEnd > 0 && this.climateExpectedEnd <= now) ||
@@ -534,7 +549,8 @@ struct Index {
       }
     } catch (err) {
       const e = err as BusinessError;
-      Log.warn(`空调/净化状态检查失败: code=${e.code} ${e.message}`);
+      this.climateFailCount++;
+      Log.warn(`空调/净化状态检查失败（第 ${this.climateFailCount} 次）: code=${e.code} ${e.message}`);
     } finally {
       this.climatePolling = false;
       // 状态可能已变为关闭，据此重排下一次检查
