@@ -3185,17 +3185,17 @@ struct Index {
    * 用 Row 拼的话溢出时会从两侧被切掉。
    *
    * 每个片段按 kind 走不同的排版层级：
-   *   label —— 状态词。13fp Medium，主题蓝 / 警示色 / 错误色，一眼扫到。
-   *   data  —— 辅助数据。11fp 等宽三级灰，退到背景不抢注意力。
-   *   key   —— 关键数值。13fp 等宽主色，与顶部「总里程」同一套语言。
-   *   sep   —— 分隔符。11fp 三级灰，左右各留 5vp。
+   *   label —— 状态词。15fp Medium，主题蓝 / 警示色 / 错误色，一眼扫到。
+   *   data  —— 辅助数据。13fp 等宽三级灰，退到背景不抢注意力。
+   *   key   —— 关键数值。15fp 等宽主色，与顶部「总里程」同一套语言。
+   *   sep   —— 分隔符。13fp 三级灰，左右各留 5vp。
    */
   @Builder
   StatusSegments() {
     Text() {
       ForEach(this.statusSegments(), (segment: StatusSegment) => {
         Span(segment.text)
-          .fontSize(segment.kind === 'label' || segment.kind === 'key' ? 13 : 11)
+          .fontSize(segment.kind === 'label' || segment.kind === 'key' ? 15 : 13)
           .fontWeight(segment.kind === 'label' ? FontWeight.Medium : FontWeight.Normal)
           .fontFamily(segment.kind === 'label' ? '' : 'HarmonyOS Sans Mono')
           .fontColor(this.segmentColor(segment))
@@ -3434,11 +3434,11 @@ struct Index {
                   Row({ space: 5 }) {
                     AppIcon({
                       name: AppIconName.WARNING,
-                      iconSize: 14,
+                      iconSize: 16,
                       color: $r('app.color.app_warn')
                     })
-                    .width(14)
-                    .height(14)
+                    .width(16)
+                    .height(16)
 
                     this.StatusSegments()
                   }
