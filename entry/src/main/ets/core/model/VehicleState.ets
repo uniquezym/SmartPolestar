@@ -114,18 +114,31 @@ export class VehicleState {
   /**
    * 汇总车窗状态。还原自 Android 端 m1379n0。
    *
-   * 任一车窗状态位为 1 或 3 视为"未关闭"；全为 0 且数组非空视为"已关闭"；否则"未知"。
+   * 协议 Exterior.OpenStatus：0=未指定 1=开启 2=关闭 3=未关严。
+   * 「未关闭」取 1 或 3，与原版 y9.clitry 的判定一致（Open 或 Ajar 算未关闭）。
+   *
+   * 任一车窗处于开启侧 → 「车窗未关闭」；
+   * 四扇全部关闭 → 「车窗已关闭」；
+   * 其余（存在未指定的扇位）→ 「车窗状态未知」，
+   * 不把「未指定」当成已关闭 —— 那样会让快捷键误报成关好了。
    */
   static summarizeWindows(states: number[] | undefined): string {
     if (states === undefined || states.length === 0) {
       return '车窗状态未知';
     }
+    let closed = 0;
     for (const s of states) {
       if (s === 1 || s === 3) {
         return '车窗未关闭';
       }
+      if (s === 2) {
+        closed++;
+      }
     }
-    return '车窗已关闭';
+    if (closed === states.length) {
+      return '车窗已关闭';
+    }
+    return '车窗状态未知';
   }
 
   /**

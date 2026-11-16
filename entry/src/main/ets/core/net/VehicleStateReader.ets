@@ -120,6 +120,9 @@ export class VehicleStateReader {
     state.doorStates = doorStates;
     state.windowStates = windowStates;
     state.windows = VehicleState.summarizeWindows(state.windowStates);
+    // 打印逐扇原始值，便于核对协议枚举：
+    // Exterior.OpenStatus 0=未指定 1=开启 2=关闭 3=未关严。
+    Log.info(`门窗原始值 门=${doorStates.join(',')} 窗=${windowStates.join(',')}`);
     state.exteriorStateAt = Date.now();
   }
 

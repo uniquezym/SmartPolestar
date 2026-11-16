@@ -1065,7 +1065,7 @@ struct Index {
         this.hoodOpen = state.hoodState === 1 || state.hoodState === 3;
         this.portOpen = state.chargePortState === 1 || state.chargePortState === 3;
         this.applyStreamPhase(ToggleKind.LOCK, state.locked, '未锁', '已锁');
-        this.applyStreamPhase(ToggleKind.WINDOW, state.windows, '车窗未关闭', '车窗已关闭');
+        this.applyStreamWindowPhase(state.windowStates, state.windows);
         if (state.tailgateLock === '未锁') {
           this.trunkUnlocked = true;
         } else if (state.tailgateLock === '已锁') {
@@ -1087,6 +1087,40 @@ struct Index {
       default:
         break;
     }
+  }
+
+  /**
+   * 用逐扇车窗状态更新车窗快捷键的相位。
+   *
+   * 两种情形分开处理：
+   *
+   *   用户点了车窗快捷键 → 要求四扇状态一致才落定。
+   *     车端是逐扇推进的（后窗先到位、前窗后到位），
+   *     只到两扇就落定会让快捷键比实际状态早一步，
+   *     与用户「四扇都开好了」的预期不符。
+   *
+   *   被动收到推送（用户在车端手动开了一扇窗）→ 沿用聚合值，
+   *     有一扇没关严就显示「车窗开」，让用户立刻看到变化。
+   *
+   * @param states  逐扇车窗状态，顺序：0=左前 1=右前 2=左后 3=右后
+   * @param summary 聚合状态文案（车窗未关闭 / 车窗已关闭）
+   */
+  private applyStreamWindowPhase(states: number[], summary: string): void {
+    // 用户点了车窗快捷键：等四扇一致
+    if (this.pendingConfirmKind === ToggleKind.WINDOW) {
+      const phase = Index.windowPhaseOf(states);
+      if (phase === undefined) {
+        // 四扇还没到齐 —— 保持现状，等下一帧
+        return;
+      }
+      this.applyStreamPhase(ToggleKind.WINDOW,
+        phase === TogglePhase.ON ? '车窗未关闭' : '车窗已关闭',
+        '车窗未关闭', '车窗已关闭');
+      return;
+    }
+
+    // 被动推送：沿用聚合值
+    this.applyStreamPhase(ToggleKind.WINDOW, summary, '车窗未关闭', '车窗已关闭');
   }
 
   /**
@@ -1317,10 +1351,11 @@ struct Index {
     } else if (state.air === '关闭') {
       this.airPhase = TogglePhase.OFF;
     }
-    if (state.windows === '车窗已关闭') {
-      this.windowPhase = TogglePhase.OFF;
-    } else if (state.windows === '车窗未关闭') {
-      this.windowPhase = TogglePhase.ON;
+    // 车窗：逐扇判定，与流式路径同一套规则 ——
+    // 四扇一致才给结论，避免部分开启时快捷键提前跳变。
+    const windowPhase = Index.windowPhaseOf(state.windowStates);
+    if (windowPhase !== undefined) {
+      this.windowPhase = windowPhase;
     }
 
     // 车模标记点：尾门锁、机盖、充电口。判定对齐原版 g10（1 或 3 视为开启）。
@@ -2501,8 +2536,12 @@ struct Index {
   /**
    * 由逐扇车窗状态推导开关阶段。
    *
-   * 四扇全部未关闭 → 开启；四扇全部关闭 → 关闭；其余（部分开启 / 状态未知）
-   * 返回 undefined，表示车端尚未推进到终态，继续等待。
+   * 协议 Exterior.OpenStatus：0=未指定 1=开启 2=关闭 3=未关严。
+   * 「开启侧」取 1 或 3，与原版 y9.clitry 的判定一致（Open 或 Ajar 算未关闭）。
+   *
+   * 四扇全部在开启侧 → 开启；四扇全部关闭 → 关闭；
+   * 其余（部分开启 / 有扇位未指定）返回 undefined，
+   * 表示车端尚未推进到终态，继续等待。
    */
   private static windowPhaseOf(states: number[]): TogglePhase | undefined {
     if (states.length === 0) {
@@ -2513,7 +2552,7 @@ struct Index {
     for (const s of states) {
       if (s === 1 || s === 3) {
         opened++;
-      } else if (s === 0) {
+      } else if (s === 2) {
         closed++;
       }
     }
