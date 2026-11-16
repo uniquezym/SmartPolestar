@@ -192,6 +192,21 @@ export class VehicleRepository {
   }
 
   /**
+   * 读取最后停车位置。
+   *
+   * 定位流的兜底路径 —— 流式不可用时按低频轮询查询。
+   *
+   * @param vin 车辆 VIN
+   */
+  async readParkedLocation(vin: string): Promise<VehicleState> {
+    const client = await this.prepare();
+    const state = new VehicleState();
+    state.vin = vin;
+    await VehicleStateReader.readParkedLocation(client, vin, state);
+    return state;
+  }
+
+  /**
    * 读取全部车辆状态。
    */
   async readAllStates(): Promise<VehicleState[]> {

@@ -381,7 +381,21 @@ export class VehicleStateReader {
 
     const response = await client.call(
       GrpcClient.SERVICE_DTL_INTERNET, 'GetLastParkedLocation', vin, payload, 12000, true);
+    VehicleStateReader.applyParkedLocation(response, state);
+  }
 
+  /**
+   * 把最后停车位置响应映射到状态对象。
+   *
+   * 快照（GetLastParkedLocation）与流式（StreamLastParkedLocations）
+   * 的响应结构完全相同，因此映射逻辑只需一份 —— 快照与流共用。
+   *
+   * 响应结构：
+   *   field 1 = VIN
+   *   field 2 = Location 消息 { field 1 = 经度, field 2 = 纬度, field 3 = Timestamp }
+   *   field 3 = stale 标志（非 0 表示数据陈旧）
+   */
+  static applyParkedLocation(response: Uint8Array, state: VehicleState): void {
     // 顶层：field 2 是位置消息，field 3 是 stale 标志。
     const outer = new ProtoReader(response).decode();
     const locationBytes = ProtoValue.get(outer, 2);

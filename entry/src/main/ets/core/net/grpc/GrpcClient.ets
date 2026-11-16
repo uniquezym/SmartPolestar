@@ -41,6 +41,17 @@ export class GrpcClient {
   static readonly STREAM_METHOD_PRECLEANING: string = 'GetPreCleaning';
   static readonly STREAM_METHOD_ODOMETER: string = 'GetOdometer';
   static readonly STREAM_METHOD_HEALTH: string = 'GetHealth';
+  /**
+   * 最后停车位置的服务端流方法。
+   *
+   * dtlinternet 服务同时提供快照（UNARY）与流式（SERVER_STREAMING）两条路：
+   *   GetLastParkedLocation   (UNARY)           —— 一次性查询
+   *   StreamLastParkedLocations (SERVER_STREAMING) —— 车端停车后主动推送
+   *
+   * 原版 Android 走的是流式那条（C3LocationController.cliextends()），
+   * 所以停车后「最后停车位置」能自动更新。
+   */
+  static readonly STREAM_METHOD_PARKED_LOCATION: string = 'StreamLastParkedLocations';
 
   /** 单次调用默认超时（毫秒）。 */
   static readonly DEFAULT_TIMEOUT_MS: number = 12000;
@@ -181,20 +192,24 @@ export class GrpcClient {
    * @param onMessage    每收到一帧时回调（裸 protobuf）
    * @param onDisconnect 流断开时回调（会尝试重连）
    * @param onFatal      流彻底不可用时回调
+   * @param useLbs       是否走 LBS 主机（定位类接口走 LBS）
+   * @param vinOnly      请求体是否只带 VIN（dtlinternet 系接口用这种格式）
    * @returns 取消订阅的函数
    */
   callStream(service: string, method: string, vin: string,
     onMessage: (message: Uint8Array) => void,
     onDisconnect: (message: string) => void,
-    onFatal: (message: string) => void): () => void {
+    onFatal: (message: string) => void,
+    useLbs: boolean = false,
+    vinOnly: boolean = false): () => void {
     if (this.session === undefined) {
       onFatal('会话未初始化');
       return (): void => {};
     }
 
-    const host = this.session.c3Host;
+    const host = useLbs ? this.session.c3LbsHost : this.session.c3Host;
     if (host.length === 0) {
-      onFatal('C3 主机未解析，请先完成服务发现');
+      onFatal(useLbs ? 'C3 LBS 主机未解析，请先完成服务发现' : 'C3 主机未解析，请先完成服务发现');
       return (): void => {};
     }
 
@@ -217,7 +232,7 @@ export class GrpcClient {
       const token = session !== undefined ? session.accessToken : '';
 
       cancelCurrent = channel.callStream(fullMethod, token, vin,
-        GrpcClient.buildStreamRequest(vin),
+        vinOnly ? GrpcClient.buildVinOnlyRequest(vin) : GrpcClient.buildStreamRequest(vin),
         (message: Uint8Array) => {
           // 收到数据说明流是活的，重置重试计数
           attempt = 0;
@@ -361,6 +376,23 @@ export class GrpcClient {
     payload[offset++] = vinBytes.length;
     payload.set(vinBytes, offset);
 
+    return payload;
+  }
+
+  /**
+   * 构造只带 VIN 的请求体。
+   *
+   * dtlinternet 系的接口（最后停车位置 / 最后已知位置）请求体格式
+   * 与 vehiclestates 系不同 —— 只有 field 1 = VIN，没有请求 UUID。
+   *
+   * 还原自 Android 端 m1389s0(vin, 1)：tag = (1 << 3) | 2 = 0x0a。
+   */
+  private static buildVinOnlyRequest(vin: string): Uint8Array {
+    const vinBytes = GrpcClient.utf8(vin);
+    const payload = new Uint8Array(vinBytes.length + 2);
+    payload[0] = 0x0a; // field 1, wire type 2
+    payload[1] = vinBytes.length;
+    payload.set(vinBytes, 2);
     return payload;
   }
 

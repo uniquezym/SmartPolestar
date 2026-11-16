@@ -88,6 +88,15 @@ struct Index {
   private static readonly CHARGE_POLL_INTERVAL_MS: number = 60000;
 
   /**
+   * 定位域兜底轮询的周期（毫秒）。
+   *
+   * 只有在定位流没建起来（流式不可用）时才启用。
+   * 定位数据的变化频率极低 —— 一年可能就变几十次（每次停车换位置），
+   * 所以兜底周期取得很长，避免无谓消耗配额。
+   */
+  private static readonly LOCATION_POLL_INTERVAL_MS: number = 5 * 60 * 1000;
+
+  /**
    * 空调 / 净化状态检查的兜底间隔，同时也是检查间隔的上限（毫秒）。
    *
    * 这两项都会到时自动停机：驻车空调与空气净化跑到设定时长后车端自动
@@ -330,6 +339,12 @@ struct Index {
   private climatePrimed: boolean = false;
   private airPrimed: boolean = false;
   private exteriorPrimed: boolean = false;
+  /** 定位域是否已收到过首帧。 */
+  private locationPrimed: boolean = false;
+  /** 定位域的兜底轮询定时器句柄。 */
+  private locationTimer: number = -1;
+  /** 定位轮询是否已有请求在途。 */
+  private locationPolling: boolean = false;
   /** 正在订阅的 VIN，用于判断是否需要重订阅。 */
   private streamVin: string = '';
   /**
@@ -413,6 +428,7 @@ struct Index {
   onPageHide(): void {
     this.stopTextTimer();
     this.stopChargeTimer();
+    this.stopLocationTimer();
     // 只取消已排的检查点，保留预计结束时刻 —— 它是绝对时刻，
     // 回到前台时按它重排即可，不用重新推算。
     this.clearClimateSchedule();
@@ -427,6 +443,7 @@ struct Index {
     this.stopTextTimer();
     this.stopChargeTimer();
     this.stopClimateTimer();
+    this.stopLocationTimer();
     this.stopVehicleStream();
   }
 
@@ -475,6 +492,58 @@ struct Index {
       this.startChargeTimer();
     } else {
       this.stopChargeTimer();
+    }
+  }
+
+  /**
+   * 启动定位域的兜底轮询。
+   *
+   * 只在定位流没建起来时启用 —— 流式推送一旦有首帧就停掉轮询。
+   */
+  private startLocationTimer(): void {
+    if (this.locationTimer !== -1) {
+      return;
+    }
+    this.locationTimer = setInterval(() => {
+      this.pollParkedLocation();
+    }, Index.LOCATION_POLL_INTERVAL_MS);
+    Log.info('启动最后停车位置轮询');
+  }
+
+  /**
+   * 停止定位域的兜底轮询。
+   */
+  private stopLocationTimer(): void {
+    if (this.locationTimer !== -1) {
+      clearInterval(this.locationTimer);
+      this.locationTimer = -1;
+      Log.info('停止最后停车位置轮询');
+    }
+  }
+
+  /**
+   * 静默拉一次最后停车位置。
+   *
+   * 只读 location 一个域，不触发整页刷新动效。
+   * 请求在途时直接跳过，避免并发。
+   */
+  private async pollParkedLocation(): Promise<void> {
+    if (this.repository === undefined || this.vin.length === 0) {
+      return;
+    }
+    if (this.locationPolling) {
+      return;
+    }
+    this.locationPolling = true;
+    try {
+      const state = await this.repository.readParkedLocation(this.vin);
+      this.applyStreamParkedLocation(state);
+    } catch (err) {
+      const e = err as BusinessError;
+      // 静默失败：轮询出错不该打扰用户，也不该把整页刷成错误态
+      Log.warn(`最后停车位置轮询失败: code=${e.code} ${e.message}`);
+    } finally {
+      this.locationPolling = false;
     }
   }
 
@@ -1027,6 +1096,9 @@ struct Index {
       });
       this.streamActive = true;
       this.streamVin = vin;
+      // 定位域的兜底轮询先开起来 ——
+      // 流式首帧到达后会由 markStreamPrimed 停掉它。
+      this.startLocationTimer();
       repository.onStreamBroken = (fullMethod: string, message: string): void => {
         Log.error(`状态流整体不可用，退回定时轮询: ${message}`);
         this.streamActive = false;
@@ -1036,14 +1108,19 @@ struct Index {
         this.climatePrimed = false;
         this.airPrimed = false;
         this.exteriorPrimed = false;
+        this.locationPrimed = false;
         // 退回轮询兜底：空调 / 净化的状态检查要立刻恢复
         this.syncClimateTimer();
         this.syncChargeTimer();
+        // 定位流也断了，兜底轮询要继续跑
+        this.startLocationTimer();
       };
     } catch (err) {
       const e = err as BusinessError;
       Log.warn(`订阅状态流失败，继续用轮询兜底: ${e.message}`);
       this.streamActive = false;
+      // 订阅整体失败，定位只能靠轮询
+      this.startLocationTimer();
     }
   }
 
@@ -1062,6 +1139,7 @@ struct Index {
     this.climatePrimed = false;
     this.airPrimed = false;
     this.exteriorPrimed = false;
+    this.locationPrimed = false;
     this.streamVin = '';
   }
 
@@ -1100,6 +1178,11 @@ struct Index {
         break;
       case 'exterior':
         this.exteriorPrimed = true;
+        break;
+      case 'location':
+        this.locationPrimed = true;
+        // 定位流已通，停掉兜底轮询
+        this.stopLocationTimer();
         break;
       default:
         break;
@@ -1154,6 +1237,10 @@ struct Index {
     copy.automaticAverageSpeedKph = state.automaticAverageSpeedKph;
     copy.sinceChargeAverageSpeedKph = state.sinceChargeAverageSpeedKph;
     copy.healthWarnings = state.healthWarnings.slice();
+    copy.parkedLatitude = state.parkedLatitude;
+    copy.parkedLongitude = state.parkedLongitude;
+    copy.parkedTimestamp = state.parkedTimestamp;
+    copy.parkedLocationStale = state.parkedLocationStale;
     return copy;
   }
 
@@ -1238,8 +1325,36 @@ struct Index {
       case 'health':
         this.healthWarnings = state.healthWarnings.slice();
         break;
+      case 'location':
+        this.applyStreamParkedLocation(state);
+        break;
       default:
         break;
+    }
+  }
+
+  /**
+   * 用流式推送更新「最后停车位置」。
+   *
+   * 车端停好车后服务端会主动推一帧新坐标，
+   * 页面上的停车时间与坐标因此能自动刷新。
+   */
+  private applyStreamParkedLocation(state: VehicleState): void {
+    if (state.parkedTimestamp !== undefined && state.parkedTimestamp > 0) {
+      this.parkedTimestamp = state.parkedTimestamp;
+      this.parkedTime = this.formatParkedTime(state.parkedTimestamp);
+    }
+    // 坐标变化时重新反查地点名。
+    // 停车位置通常不变，所以只在坐标真的变了才反查 —— 每次推送都反查
+    // 会白白消耗地理编码配额。
+    if (state.parkedLatitude !== undefined && state.parkedLongitude !== undefined &&
+      (state.parkedLatitude !== this.parkedLatitude ||
+        state.parkedLongitude !== this.parkedLongitude)) {
+      this.parkedLatitude = state.parkedLatitude;
+      this.parkedLongitude = state.parkedLongitude;
+      this.parkedCoordinate =
+        `${state.parkedLatitude.toFixed(4)}, ${state.parkedLongitude.toFixed(4)}`;
+      this.resolveParkedPlace();
     }
   }
 

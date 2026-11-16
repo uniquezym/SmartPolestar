@@ -6,7 +6,8 @@ import { Log } from '../../common/Log';
 /**
  * 状态域标识。
  */
-export type StateDomain = 'exterior' | 'climate' | 'air' | 'battery' | 'odometer' | 'health';
+export type StateDomain =
+  'exterior' | 'climate' | 'air' | 'battery' | 'odometer' | 'health' | 'location';
 
 /**
  * 单个状态域的流式订阅描述。
@@ -19,6 +20,10 @@ interface StreamSpec {
   method: string;
   /** 把响应映射到状态对象。 */
   apply: (response: Uint8Array, state: VehicleState) => void;
+  /** 是否走 LBS 主机（定位类接口在 LBS 主机上）。 */
+  useLbs?: boolean;
+  /** 请求体是否只带 VIN（dtlinternet 系接口用这种格式）。 */
+  vinOnly?: boolean;
 }
 
 /**
@@ -79,6 +84,17 @@ export class VehicleStateStream {
       method: GrpcClient.STREAM_METHOD_HEALTH,
       apply: (response: Uint8Array, state: VehicleState) =>
         VehicleStateReader.applyHealth(response, state)
+    },
+    {
+      // 最后停车位置。走 dtlinternet 服务 + LBS 主机，
+      // 车端停车后服务端主动推送新坐标 —— 原版 Android 同款。
+      domain: 'location',
+      service: GrpcClient.SERVICE_DTL_INTERNET,
+      method: GrpcClient.STREAM_METHOD_PARKED_LOCATION,
+      apply: (response: Uint8Array, state: VehicleState) =>
+        VehicleStateReader.applyParkedLocation(response, state),
+      useLbs: true,
+      vinOnly: true
     }
   ];
 
@@ -143,7 +159,9 @@ export class VehicleStateStream {
         (message: string) => {
           this.markBroken(spec.domain);
           this.onStreamFatal?.(spec.domain, message);
-        });
+        },
+        spec.useLbs === true,
+        spec.vinOnly === true);
       this.cancels.set(spec.domain, cancel);
     }
 
