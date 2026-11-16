@@ -212,6 +212,23 @@ struct Index {
   @State climateCountdownMinutes: number = -1;
   /** 空气净化剩余分钟数（本地倒计时），语义同climateCountdownMinutes。 */
   @State airCountdownMinutes: number = -1;
+  /**
+   * 露营模式是否正在关闭。
+   *
+   * 关闭过程中状态行不能先消失 —— 用户点了关闭、按钮已经在转圈，
+   * 但「露营模式已开启 · 剩余 X」立刻不见，会让人以为已经关掉了。
+   * 真正该消失的时机是车端确认关闭成功之后。
+   */
+  @State campClosing: boolean = false;
+  /**
+   * 驻车空调是否正在关闭。
+   *
+   * 与 campClosing 同理 —— 关闭过程中状态行要保留，
+   * 等车端确认关闭后再撤掉。
+   */
+  @State climateClosing: boolean = false;
+  /** 空气净化是否正在关闭。语义同 climateClosing。 */
+  @State airClosing: boolean = false;
 
   /** 尾门解锁态 —— 车模尾门标记点显示警示色。 */
   @State trunkUnlocked: boolean = false;
@@ -1273,6 +1290,9 @@ struct Index {
       this.setPhase(kind, TogglePhase.ON);
     } else if (actual === offText) {
       this.setPhase(kind, TogglePhase.OFF);
+      // 被动收到「已关闭」的推送（用户在车端手动关）——
+      // 这时也要撤掉「正在关闭」标记，否则状态行会一直挂着。
+      this.clearClosing(kind);
     }
   }
 
@@ -1643,75 +1663,6 @@ struct Index {
   }
 
   /**
-   * 充电枪已连接时显示在「电量」标题后面的 inline 补充信息。
-   *
-   * 按充电阶段给出一句话：
-   *   充电中 → 功率 · 电流 · 充满剩余时长
-   *   已完成 → 已完成
-   *   已插枪 → 已连接
-   *   已暂停 → 已暂停
-   *   故障   → 充电错误 / 连接故障
-   *
-   * 放在标题后面而非另起一行，行数不变，下方内容不会被顶下去。
-   */
-  private chargeInlineText(): string {
-    const stage = this.chargeStage();
-    if (stage === ChargeStage.IDLE) {
-      return '';
-    }
-    if (stage === ChargeStage.DISCHARGING) {
-      return '放电中';
-    }
-    if (stage === ChargeStage.COMPLETED) {
-      return '已完成';
-    }
-    if (stage === ChargeStage.FAULT) {
-      return this.chargerConnection === '连接故障' ? '连接故障' : '充电错误';
-    }
-    if (stage === ChargeStage.PAUSED) {
-      return '已暂停';
-    }
-    if (stage === ChargeStage.PLUGGED) {
-      return '已连接';
-    }
-    // 充电中：功率 · 电流 · 充满剩余时长
-    const parts: string[] = [];
-    const power = this.powerText();
-    if (power.length > 0) {
-      parts.push(power);
-    }
-    const current = this.currentText();
-    if (current.length > 0) {
-      parts.push(current);
-    }
-    const remaining = this.remainingTimeText();
-    if (remaining.length > 0) {
-      parts.push(remaining);
-    }
-    if (parts.length === 0) {
-      return '充电中';
-    }
-    return parts.join(' · ');
-  }
-
-  /**
-   * 电量区 inline 文案的颜色，随充电阶段变化。
-   */
-  private chargeInlineColor(): ResourceColor {
-    const stage = this.chargeStage();
-    if (stage === ChargeStage.COMPLETED) {
-      return $r('app.color.app_ok');
-    }
-    if (stage === ChargeStage.FAULT) {
-      return $r('app.color.app_error');
-    }
-    if (stage === ChargeStage.DISCHARGING) {
-      return $r('app.color.app_secondary_text');
-    }
-    return $r('app.color.app_accent');
-  }
-
-  /**
    * 车型副标题：配置代码 / 电池容量 / 车型兜底。
    */
   private modelSubtitle(): string {
@@ -1818,23 +1769,36 @@ struct Index {
    * 露营模式与驻车空调本质是同一件事 —— 露营模式开着时空调必然在跑，
    * 所以两者合并成一条，露营模式优先（它多了倒计时信息）。
    * 空调与空气净化互斥，不会同时出现。
+   *
+   * 关闭过程中（closing 标记为 true）保留原有文案，
+   * 只是把措辞改成「正在关闭」——
+   * 状态行在指令执行完之前不能消失，否则用户会以为已经关掉了。
    */
   private sessionStatusText(): string {
-    if (this.campPhase === TogglePhase.ON) {
+    if (this.campPhase === TogglePhase.ON || this.campClosing) {
+      if (this.campClosing) {
+        return '露营模式正在关闭…';
+      }
       const remaining = this.campRemainingMinutes;
       if (remaining > 0) {
         return `露营模式已开启 · 剩余 ${this.campDurationText(remaining)}`;
       }
       return '露营模式已开启';
     }
-    if (this.climatePhase === TogglePhase.ON) {
+    if (this.climatePhase === TogglePhase.ON || this.climateClosing) {
+      if (this.climateClosing) {
+        return '驻车空调正在关闭…';
+      }
       const remaining = this.climateCountdownMinutes;
       if (remaining > 0) {
         return `驻车空调运行中 · 剩余 ${this.campDurationText(remaining)}`;
       }
       return '驻车空调运行中';
     }
-    if (this.airPhase === TogglePhase.ON) {
+    if (this.airPhase === TogglePhase.ON || this.airClosing) {
+      if (this.airClosing) {
+        return '空气净化正在关闭…';
+      }
       const parts: string[] = ['空气净化运行中'];
       const remaining = this.airCountdownMinutes;
       if (remaining > 0) {
@@ -2196,10 +2160,16 @@ struct Index {
       // 空调按钮同时进入执行中 —— 概览页的空调快捷键就是关闭露营模式的入口，
       // 不给执行反馈会让人以为没点中。
       this.climatePhase = TogglePhase.PENDING;
+      // 状态行在指令确认前保留 —— 相位已经是 PENDING，
+      // 若不看这个标记，「露营模式已开启 · 剩余 X」会立刻消失。
+      this.campClosing = true;
+      this.climateClosing = true;
       const success = await this.executeAction(VehicleCommands.ACTION_CLIMATE_STOP);
       if (!success) {
         this.campPhase = TogglePhase.ON;
         this.climatePhase = TogglePhase.ON;
+        this.campClosing = false;
+        this.climateClosing = false;
         return;
       }
       await controller.stop();
@@ -2207,6 +2177,8 @@ struct Index {
       this.campRemainingMinutes = 0;
       this.campRemainingRatio = 0;
       this.climatePhase = TogglePhase.OFF;
+      this.campClosing = false;
+      this.climateClosing = false;
       this.toast('露营模式已关闭');
       return;
     }
@@ -2240,10 +2212,13 @@ struct Index {
     this.campRemainingMinutes = 0;
     this.campRemainingRatio = 0;
     this.climatePhase = TogglePhase.OFF;
+    this.campClosing = false;
+    this.climateClosing = false;
     await this.executeAction(VehicleCommands.ACTION_CLIMATE_STOP);
     if (this.airActive()) {
       await this.executeAction(VehicleCommands.ACTION_AIR_STOP);
       this.airPhase = TogglePhase.OFF;
+      this.airClosing = false;
     }
     this.toast('露营模式已到时，驻车空调已关闭');
   }
@@ -2262,6 +2237,7 @@ struct Index {
     this.campPhase = TogglePhase.OFF;
     this.campRemainingMinutes = 0;
     this.campRemainingRatio = 0;
+    this.campClosing = false;
   }
 
   /**
@@ -2355,6 +2331,20 @@ struct Index {
     this.pendingConfirmKind = kind;
     this.pendingConfirmTarget = target;
 
+    // 关闭方向：挂「正在关闭」标记。
+    //
+    // 指令执行期间按钮会进入 PENDING，相位从 ON 变成 PENDING，
+    // 状态行若只看 ON 就会立刻消失 —— 用户点了关闭、按钮在转圈，
+    // 但「剩余 58 分钟」不见了，看起来像是被清空了。
+    // 挂上标记后，状态行在车端确认关闭之前一直保留。
+    if (target === TogglePhase.OFF) {
+      if (kind === ToggleKind.CLIMATE) {
+        this.climateClosing = true;
+      } else if (kind === ToggleKind.PURIFIER) {
+        this.airClosing = true;
+      }
+    }
+
     // 高安全性操作（整车解锁、开窗）先过指纹门禁，再下发指令。
     // 验证期间用「验证中」态提示用户点了哪个按钮，
     // 但不显示执行动画 —— 指令尚未下发，不能让用户以为已经在执行。
@@ -2401,6 +2391,7 @@ struct Index {
         if (!success) {
           // 失败：回滚到点击前的状态，并把原因告诉用户
           this.pendingConfirmKind = undefined;
+          this.clearClosing(kind);
           this.setPhase(kind, prev);
           this.toast(message.length > 0 ? message : `${this.toggleLabel(kind)}指令下发失败`);
           Log.warn(`车控执行失败：${message}`);
@@ -2418,8 +2409,22 @@ struct Index {
     } catch (err) {
       const e = err as BusinessError;
       this.pendingConfirmKind = undefined;
+      this.clearClosing(kind);
       this.setPhase(kind, prev);
       Log.error(`车控执行异常: ${e.message}`);
+    }
+  }
+
+  /**
+   * 清掉「正在关闭」标记。
+   *
+   * 只在明确知道结果时调用：指令下发失败（回滚）或车端确认关闭成功。
+   */
+  private clearClosing(kind: ToggleKind): void {
+    if (kind === ToggleKind.CLIMATE) {
+      this.climateClosing = false;
+    } else if (kind === ToggleKind.PURIFIER) {
+      this.airClosing = false;
     }
   }
 
@@ -2669,6 +2674,10 @@ struct Index {
    */
   private settleToggle(kind: ToggleKind, target: TogglePhase): void {
     this.setPhase(kind, target);
+    // 关闭已确认 —— 状态行这时才允许撤掉
+    if (target === TogglePhase.OFF) {
+      this.clearClosing(kind);
+    }
     if (kind === ToggleKind.CLIMATE || kind === ToggleKind.PURIFIER) {
       this.syncClimateTimer();
       return;
@@ -3269,24 +3278,16 @@ struct Index {
             .height(Index.STATUS_AREA_HEIGHT)
             .justifyContent(FlexAlign.Center)
             .alignItems(HorizontalAlign.Center)
-            .margin({ top: 16 })
+            .margin({ top: 10 })
 
             // ---------- 电量与续航 ----------
             Row() {
               Column({ space: 0 }) {
-                // 「电量」标题行：充电相关时 inline 追加一句状态说明，
-                // 放在标题后面而不是另起一行，行数不变，下方内容不会被顶下去。
-                Row({ space: 6 }) {
-                  Text('电量')
-                    .fontSize(12)
-                    .fontColor($r('app.color.app_tertiary_text'))
-                  if (this.chargingMarked() || this.chargeStage() === ChargeStage.DISCHARGING) {
-                    Text(this.chargeInlineText())
-                      .fontSize(12)
-                      .fontColor(this.chargeInlineColor())
-                  }
-                }
-                .alignItems(VerticalAlign.Bottom)
+                // 充电状态不再在这里重复 —— 车模下方的状态行已经统一显示，
+                // 两处都写会出现同样的信息，且两边可能不同步。
+                Text('电量')
+                  .fontSize(12)
+                  .fontColor($r('app.color.app_tertiary_text'))
                 Row({ space: 2 }) {
                   Text(this.battery >= 0 ? `${this.battery}` : '—')
                     .fontSize(46)
@@ -3343,6 +3344,8 @@ struct Index {
               value: this.parkedTime,
               detail: this.parkedPlace.length > 0 ? this.parkedPlace : this.parkedCoordinate,
               showChevron: true,
+              // 页尾最后一行，下面没有下一项，不需要分隔线
+              showDivider: false,
               onTap: () => {
                 this.openParkedMap();
               }

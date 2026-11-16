@@ -36,6 +36,13 @@ export struct StateRow {
   @Prop tone: StateTone = StateTone.NEUTRAL;
   /** 是否可点击下钻。 */
   @Prop showChevron: boolean = false;
+  /**
+   * 是否显示底部分隔线。
+   *
+   * 列表最后一行通常不需要分隔线 —— 它下面没有下一项，
+   * 横线只会在页尾留下一条多余的痕迹。
+   */
+  @Prop showDivider: boolean = true;
   /** 点击回调。为空则整行不可点。 */
   onTap?: () => void;
 
@@ -122,7 +129,7 @@ export struct StateRow {
     }
     .width('100%')
     .padding({ top: 13, bottom: 13 })
-    .border({ width: { bottom: 1 }, color: $r('app.color.app_rule') })
+    .border({ width: { bottom: this.showDivider ? 1 : 0 }, color: $r('app.color.app_rule') })
     .onClick(() => {
       if (this.onTap !== undefined) {
         this.onTap();
