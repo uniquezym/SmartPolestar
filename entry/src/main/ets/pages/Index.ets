@@ -1092,11 +1092,13 @@ struct Index {
   /**
    * 用流式推送的车端状态更新开关相位。
    *
-   * 执行中 / 验证中不覆盖 —— 指令刚下发、车端还没推进到终态，
-   * 此时推来的多半是执行前的旧值，覆盖会把按钮弹回去。
+   * 验证中不覆盖 —— 指纹还没过，指令尚未下发，此时推来的必然是旧值。
    *
-   * 正在等推送确认时，状态到达目标态即落定并结束等待；
-   * 未到目标态则继续等（车端还没生效）。
+   * **执行中要专门处理**：执行中正是「等推送确认」的状态，
+   * 推送到达说明车端已经推进到终态，这时恰恰要落定。
+   * 若在这里按「执行中一律不覆盖」短路，推送会被丢掉，
+   * 按钮只能等预算耗尽才强行落定 —— 表现就是车模已经变了、
+   * 快捷键却还在转圈好几秒。
    *
    * @param kind    开关语义类型
    * @param actual  车端当前状态文案
@@ -1106,7 +1108,7 @@ struct Index {
   private applyStreamPhase(kind: ToggleKind, actual: string,
     onText: string, offText: string): void {
     const current = this.phaseOf(kind);
-    if (current === TogglePhase.PENDING || current === TogglePhase.VERIFYING) {
+    if (current === TogglePhase.VERIFYING) {
       return;
     }
 
@@ -1121,6 +1123,11 @@ struct Index {
         this.settleToggle(kind, this.pendingConfirmTarget);
         this.toast(`${this.toggleLabel(kind)}已${this.pendingConfirmTarget === TogglePhase.ON ? '开启' : '关闭'}`);
       }
+      return;
+    }
+
+    // 执行中但没有在等确认 —— 指令执行中推送来的多半还是旧值，忽略。
+    if (current === TogglePhase.PENDING) {
       return;
     }
 
@@ -1994,6 +2001,18 @@ struct Index {
     // 目标动作：由当前阶段决定
     const action = this.actionOf(kind, prev);
 
+    // 目标状态：点击前的状态取反
+    const target: TogglePhase = prev === TogglePhase.ON ? TogglePhase.OFF : TogglePhase.ON;
+
+    // **先挂起推送确认，再下发指令**。
+    //
+    // 指令下发是异步的（token 续期 + 指令调用），车端响应完全可能
+    // 早于该调用返回。若等到下发成功才挂起确认，推送就会落在
+    // 「已下发但还没开始等确认」的窗口里被丢掉 ——
+    // 车模已经变了，按钮却要等 12 秒预算耗尽才落定。
+    this.pendingConfirmKind = kind;
+    this.pendingConfirmTarget = target;
+
     // 高安全性操作（整车解锁、开窗）先过指纹门禁，再下发指令。
     // 验证期间用「验证中」态提示用户点了哪个按钮，
     // 但不显示执行动画 —— 指令尚未下发，不能让用户以为已经在执行。
@@ -2001,31 +2020,35 @@ struct Index {
       this.setPhase(kind, TogglePhase.VERIFYING);
       this.guardByFingerprint(action, () => {
         this.setPhase(kind, TogglePhase.PENDING);
-        this.dispatchToggle(kind, action, prev);
+        this.dispatchToggle(kind, action, prev, target);
       }, () => {
         // 指纹未通过：不发送指令，开关状态保持点击前
+        this.pendingConfirmKind = undefined;
         this.setPhase(kind, prev);
       });
       return;
     }
 
     this.setPhase(kind, TogglePhase.PENDING);
-    this.dispatchToggle(kind, action, prev);
+    this.dispatchToggle(kind, action, prev, target);
   }
 
   /**
-   * 下发开关指令并轮询确认车端状态。
+   * 下发开关指令并等车端状态确认后落定。
    *
    * @param kind   开关语义类型
    * @param action 已确定的动作
    * @param prev   点击前的阶段，失败时回滚用
+   * @param target 目标状态
    */
-  private async dispatchToggle(kind: ToggleKind, action: string, prev: TogglePhase): Promise<void> {
+  private async dispatchToggle(kind: ToggleKind, action: string, prev: TogglePhase,
+    target: TogglePhase): Promise<void> {
     const ctx = this.context;
     const client = this.repository?.getClient();
     const session = this.repository?.getSession();
     if (ctx === undefined || client === undefined || session === undefined) {
       this.errorMessage = '会话未就绪，请重试';
+      this.pendingConfirmKind = undefined;
       this.setPhase(kind, prev);
       return;
     }
@@ -2035,13 +2058,14 @@ struct Index {
       await coordinator.execute(this.vin, action, (success: boolean, message: string) => {
         if (!success) {
           // 失败：回滚到点击前的状态，并把原因告诉用户
+          this.pendingConfirmKind = undefined;
           this.setPhase(kind, prev);
           this.toast(message.length > 0 ? message : `${this.toggleLabel(kind)}指令下发失败`);
           Log.warn(`车控执行失败：${message}`);
           return;
         }
         // 指令已下发，状态待确认：由 confirmToggle 等车端状态确认后落定
-        this.confirmToggle(kind, prev);
+        this.confirmToggle(kind, target);
         // 从概览页关掉驻车空调，等同于结束露营模式 ——
         // 露营模式是靠空调在跑支撑的，空调没了倒计时就没有意义了。
         if (kind === ToggleKind.CLIMATE && action === VehicleCommands.ACTION_CLIMATE_STOP &&
@@ -2051,6 +2075,7 @@ struct Index {
       });
     } catch (err) {
       const e = err as BusinessError;
+      this.pendingConfirmKind = undefined;
       this.setPhase(kind, prev);
       Log.error(`车控执行异常: ${e.message}`);
     }
@@ -2187,9 +2212,8 @@ struct Index {
    * 超过预算（12 秒）仍未确认，则按目标状态落定：指令确实已下发成功，
    * 只是车端还没推进到终态，不应把 UI 弹回原状态。
    */
-  private async confirmToggle(kind: ToggleKind, prev: TogglePhase): Promise<void> {
+  private async confirmToggle(kind: ToggleKind, target: TogglePhase): Promise<void> {
     const budgetMs: number = 12000;
-    const target: TogglePhase = prev === TogglePhase.ON ? TogglePhase.OFF : TogglePhase.ON;
 
     // 流式可用时挂起等待，由推送来确认
     if (this.streamReadyFor(kind)) {
@@ -2201,6 +2225,7 @@ struct Index {
     }
 
     await this.confirmToggleByPolling(kind, target, budgetMs);
+    this.pendingConfirmKind = undefined;
   }
 
   /**
@@ -2243,7 +2268,9 @@ struct Index {
       if (!this.streamReadyFor(kind)) {
         Log.warn('状态流已断开，指令确认改走轮询');
         this.pendingConfirmKind = undefined;
-        await this.confirmToggleByPolling(kind, target, budgetMs);
+        // 只把剩余预算交给轮询，否则总等待时间会翻倍
+        const remaining = budgetMs - (Date.now() - startedAt);
+        await this.confirmToggleByPolling(kind, target, Math.max(remaining, 1000));
         return;
       }
       await this.delay(200);
