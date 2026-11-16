@@ -1,6 +1,7 @@
 import { rcp } from '@kit.RemoteCommunicationKit';
 import { connection } from '@kit.NetworkKit';
 import { BusinessError, Log } from '../../../common/Log';
+import { GrpcMessageParser } from './GrpcMessageParser';
 
 /**
  * gRPC unary 调用的 RCP 传输层。
@@ -30,6 +31,14 @@ export class GrpcRcpChannel {
 
   /** 建连超时（毫秒）。 */
   private static readonly CONNECT_TIMEOUT_MS: number = 15000;
+
+  /**
+   * 服务端流的传输超时（毫秒）。
+   *
+   * 服务端流是长连接，车端状态可能几分钟才变一次，因此这个值给得很大，
+   * 实际由断流/网络异常来收口，而不是靠超时掐断。
+   */
+  private static readonly STREAM_TIMEOUT_MS: number = 3600000;
 
   /**
    * 传输层错误码 —— 发生后可换 IP 重试。
@@ -198,6 +207,118 @@ export class GrpcRcpChannel {
     };
     this.session = rcp.createSession(configuration);
     return this.session;
+  }
+
+  /**
+   * 发起一次服务端流式 gRPC 调用。
+   *
+   * 与一元调用的区别：服务端会**持续推送**多条消息（车端状态一变就推一帧），
+   * 直到流被关闭。因此这里不用 `session.fetch()` 的 Promise 语义 ——
+   * 那会把整个响应体攒完才 resolve，拿不到增量。
+   *
+   * 改用 `destination: IncomingDataCallback`：RCP 每收到一块数据就回调一次，
+   * 块边界与 gRPC 消息边界无关，由 GrpcMessageParser 负责拼装。
+   *
+   * @param fullMethod `<service>/<method>`，如 `services.vehiclestates.exterior.ExteriorService/GetExterior`
+   * @param token      Bearer access token
+   * @param vin        车辆 VIN，作为 gRPC metadata 传递
+   * @param payload    protobuf 请求负载
+   * @param onMessage  每收到一条完整消息时回调（裸 protobuf，不含 gRPC 帧头）
+   * @param onEnd      流结束（正常或异常）时回调，参数为错误信息（null 表示正常结束）
+   * @returns 一个 cancel 函数，调用后主动断开这条流
+   */
+  callStream(fullMethod: string, token: string, vin: string, payload: Uint8Array,
+    onMessage: (message: Uint8Array) => void,
+    onEnd: (error: string | null) => void): () => void {
+    const parser = new GrpcMessageParser();
+    let canceled = false;
+
+    const frame = GrpcRcpChannel.encodeGrpcFrame(payload);
+
+    const headers: rcp.RequestHeaders = {
+      'content-type': 'application/grpc',
+      'te': 'trailers',
+      'grpc-encoding': 'identity',
+      'grpc-accept-encoding': 'identity',
+      'authorization': `Bearer ${token}`,
+      'vin': vin,
+      'user-agent': 'grpc-java-okhttp/1.85.1'
+    };
+
+    const url = `https://${this.host}/${fullMethod}`;
+
+    // 服务端流长期不结束，传输超时给一个很大的值；
+    // 不设置 inactivityMs —— 车端状态可能几分钟都不变，那会把流掐掉。
+    const configuration = this.buildConfiguration(GrpcRcpChannel.STREAM_TIMEOUT_MS);
+
+    const request = new rcp.Request(url, 'POST', headers, frame.buffer as ArrayBuffer,
+      undefined, undefined, configuration);
+
+    // 增量接收：每收到一块数据就交给解析器，解析出完整消息即刻回调。
+    request.destination = (incomingData: ArrayBuffer): void => {
+      if (canceled) {
+        return;
+      }
+      try {
+        const messages = parser.feed(new Uint8Array(incomingData));
+        for (const message of messages) {
+          onMessage(message);
+        }
+      } catch (err) {
+        const e = err as BusinessError;
+        Log.warn(`gRPC 流解析失败 ${fullMethod}: ${e.message}`);
+      }
+    };
+
+    const session = this.ensureSession();
+
+    session.fetch(request).then((response: rcp.Response) => {
+      if (canceled) {
+        return;
+      }
+      const status = response.statusCode;
+      const grpcStatus = GrpcRcpChannel.headerValue(response.headers['grpc-status']);
+      const grpcMessage = GrpcRcpChannel.headerValue(response.headers['grpc-message']);
+      Log.info(`gRPC 流(RCP) ${fullMethod} 结束 status=${status} grpcStatus=${grpcStatus} ` +
+        `消息数=${parser.getMessageCount()}`);
+      if (status === 200 && (grpcStatus.length === 0 || grpcStatus === '0')) {
+        onEnd(null);
+      } else {
+        onEnd(`gRPC 流结束异常: status=${status} grpcStatus=${grpcStatus} ${grpcMessage}`);
+      }
+    }).catch((err: BusinessError) => {
+      if (canceled) {
+        return;
+      }
+      Log.warn(`gRPC 流(RCP) ${fullMethod} 异常: code=${err.code} ${err.message}`);
+      onEnd(err.message);
+    });
+
+    // 主动断开：cancel 掉这条 request。
+    return (): void => {
+      if (canceled) {
+        return;
+      }
+      canceled = true;
+      try {
+        session.cancel(request);
+      } catch (err) {
+        const e = err as BusinessError;
+        Log.warn(`取消 gRPC 流失败 ${fullMethod}: ${e.message}`);
+      }
+    };
+  }
+
+  /**
+   * 编码 gRPC 消息帧：1 字节压缩标志 + 4 字节大端长度 + 消息体。
+   */
+  private static encodeGrpcFrame(payload: Uint8Array): Uint8Array {
+    const frame = new Uint8Array(5 + payload.length);
+    frame[0] = 0;
+    const view = new DataView(frame.buffer);
+    view.setUint32(1, payload.length, false);
+    frame.set(payload, 5);
+    return frame;
   }
 
   /**

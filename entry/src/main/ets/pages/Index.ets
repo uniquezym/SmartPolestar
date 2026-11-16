@@ -16,6 +16,7 @@ import { MapLauncher } from '../core/vehicle/MapLauncher';
 import { CardPublisher } from '../core/vehicle/CardPublisher';
 import { BiometricGuard, BiometricResult } from '../core/vehicle/BiometricGuard';
 import { SessionStore } from '../core/session/SessionStore';
+import { StateDomain } from '../core/vehicle/VehicleStateStream';
 import { BusinessError, Log } from '../common/Log';
 
 /**
@@ -249,6 +250,37 @@ struct Index {
   /** 连续多少次状态检查失败。失败时要退避，不能一直高频重试。 */
   private climateFailCount: number = 0;
 
+  /**
+   * 状态流是否已建立订阅。
+   *
+   * 为 true 表示长连接已挂上；各域是否已经能收到推送看下面的 primed 标记。
+   */
+  private streamActive: boolean = false;
+  /**
+   * 各域是否已收到过首帧。
+   *
+   * 收到首帧说明该域的整条链路（建连 → 鉴权 → 协议解析 → 推送）都通了，
+   * 此时该域才可以停掉定时轮询。
+   *
+   * 必须按域分别记 —— 只收到里程推送不代表空调也会推，
+   * 不能因此把空调的轮询也停掉。
+   */
+  private batteryPrimed: boolean = false;
+  private climatePrimed: boolean = false;
+  private airPrimed: boolean = false;
+  private exteriorPrimed: boolean = false;
+  /** 正在订阅的 VIN，用于判断是否需要重订阅。 */
+  private streamVin: string = '';
+  /**
+   * 等待流式推送确认的开关。
+   *
+   * 非 undefined 表示有一个指令正在等推送确认，
+   * 此时对应的开关相位不能被推送覆盖。
+   */
+  private pendingConfirmKind: ToggleKind | undefined = undefined;
+  /** 等待确认的目标状态。 */
+  private pendingConfirmTarget: TogglePhase = TogglePhase.OFF;
+
   aboutToAppear(): void {
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     this.repository = new VehicleRepository(this.context);
@@ -311,6 +343,8 @@ struct Index {
     // 只取消已排的检查点，保留预计结束时刻 —— 它是绝对时刻，
     // 回到前台时按它重排即可，不用重新推算。
     this.clearClimateSchedule();
+    // 长连接在后台会被系统回收，切回前台要重新订阅
+    this.stopVehicleStream();
   }
 
   /**
@@ -320,6 +354,7 @@ struct Index {
     this.stopTextTimer();
     this.stopChargeTimer();
     this.stopClimateTimer();
+    this.stopVehicleStream();
   }
 
   /**
@@ -354,8 +389,14 @@ struct Index {
    *
    * 只有「充电中」和「已暂停」需要轮询 —— 这两种情况下电量还会继续变。
    * 其余阶段电量是静止的，轮询没有意义。
+   *
+   * 状态流可用时不轮询 —— 服务端会主动推电量变化。
    */
   private syncChargeTimer(): void {
+    if (this.batteryPrimed) {
+      this.stopChargeTimer();
+      return;
+    }
     const stage = this.chargeStage();
     if (stage === ChargeStage.CHARGING || stage === ChargeStage.PAUSED) {
       this.startChargeTimer();
@@ -420,6 +461,13 @@ struct Index {
     const airOn = this.airPhase === TogglePhase.ON;
     if (!climateOn && !airOn) {
       this.stopClimateTimer();
+      return;
+    }
+
+    // 空调与净化各自独立：某个域的流已通就不再查那个域。
+    // 车端到时停机时服务端会主动推一帧，按钮自然回落。
+    if ((!climateOn || this.climatePrimed) && (!airOn || this.airPrimed)) {
+      this.clearClimateSchedule();
       return;
     }
 
@@ -695,9 +743,10 @@ struct Index {
   /**
    * 从后台恢复。
    *
-   * 只做两件事：
+   * 三件事：
    *   1. 重新读取会话（后台期间令牌可能过期）
-   *   2. 距上次刷新超过阈值时才拉一次状态
+   *   2. 重新订阅状态流（长连接在后台被回收）
+   *   3. 距上次刷新超过阈值时才拉一次状态
    */
   private async resume(): Promise<void> {
     if (this.repository === undefined) {
@@ -714,6 +763,11 @@ struct Index {
       }
       Log.warn(`恢复前台时读取会话失败: ${e.message}`);
       return;
+    }
+
+    // 恢复订阅：页面隐藏时流已断开，这里重新挂上
+    if (this.vin.length > 0) {
+      await this.startVehicleStream(this.vin);
     }
 
     if (!this.shouldRefreshOnResume()) {
@@ -786,6 +840,8 @@ struct Index {
       this.markRefreshed();
       // 把状态同步到桌面卡片
       this.publishCard();
+      // 快照拿到了就订阅状态流：之后车端变化由服务端主动推送
+      await this.startVehicleStream(states[0].vin);
     } catch (err) {
       const e = err as BusinessError;
       if (e.code === 401) {
@@ -803,6 +859,275 @@ struct Index {
       if (!this.refreshing) {
         this.refreshText();
       }
+    }
+  }
+
+  // ---------- 服务端流式状态 ----------
+
+  /**
+   * 订阅车辆状态的流式推送。
+   *
+   * 对应原版 Android：每个状态服务挂一条 SERVER_STREAMING 长连接，
+   * 服务端在车端状态变化时主动推一帧，页面立刻能感知。
+   *
+   * 订阅失败不影响页面 —— 快照已经拿到了，轮询兜底仍在。
+   */
+  private async startVehicleStream(vin: string): Promise<void> {
+    const repository = this.repository;
+    if (repository === undefined || vin.length === 0) {
+      return;
+    }
+    if (this.streamActive && this.streamVin === vin) {
+      return;
+    }
+
+    this.stopVehicleStream();
+
+    try {
+      await repository.startStream(vin, (domain: StateDomain, state: VehicleState) => {
+        this.onStreamUpdate(domain, state);
+      });
+      this.streamActive = true;
+      this.streamVin = vin;
+      repository.onStreamBroken = (fullMethod: string, message: string): void => {
+        Log.error(`状态流整体不可用，退回定时轮询: ${message}`);
+        this.streamActive = false;
+        // 推送链路已断，各域的首帧标记要一并清掉，
+        // 否则轮询会因为「已就绪」而不启动。
+        this.batteryPrimed = false;
+        this.climatePrimed = false;
+        this.airPrimed = false;
+        this.exteriorPrimed = false;
+        // 退回轮询兜底：空调 / 净化的状态检查要立刻恢复
+        this.syncClimateTimer();
+        this.syncChargeTimer();
+      };
+    } catch (err) {
+      const e = err as BusinessError;
+      Log.warn(`订阅状态流失败，继续用轮询兜底: ${e.message}`);
+      this.streamActive = false;
+    }
+  }
+
+  /**
+   * 停止状态流订阅。
+   */
+  private stopVehicleStream(): void {
+    const repository = this.repository;
+    if (repository === undefined) {
+      return;
+    }
+    repository.stopStream();
+    repository.onStreamBroken = undefined;
+    this.streamActive = false;
+    this.batteryPrimed = false;
+    this.climatePrimed = false;
+    this.airPrimed = false;
+    this.exteriorPrimed = false;
+    this.streamVin = '';
+  }
+
+  /**
+   * 收到一帧流式状态。
+   *
+   * RCP 的 IncomingDataCallback 不在 UI 线程，
+   * 因此这里只把数据攒起来，切回 UI 线程后再更新 @State。
+   */
+  private onStreamUpdate(domain: StateDomain, state: VehicleState): void {
+    const snapshot: VehicleState = this.copyState(state);
+    setTimeout(() => {
+      this.markStreamPrimed(domain);
+      this.applyStreamState(domain, snapshot);
+    }, 0);
+  }
+
+  /**
+   * 标记某域已收到过首帧。
+   *
+   * 首帧到达即说明该域的推送链路已通，可以停掉该域的定时轮询。
+   */
+  private markStreamPrimed(domain: StateDomain): void {
+    switch (domain) {
+      case 'battery':
+        this.batteryPrimed = true;
+        this.syncChargeTimer();
+        break;
+      case 'climate':
+        this.climatePrimed = true;
+        this.syncClimateTimer();
+        break;
+      case 'air':
+        this.airPrimed = true;
+        this.syncClimateTimer();
+        break;
+      case 'exterior':
+        this.exteriorPrimed = true;
+        break;
+      default:
+        break;
+    }
+  }
+
+  /**
+   * 复制状态对象。
+   *
+   * 流式回调是异步触发的，直接读共享对象可能读到后续帧的内容，
+   * 因此先做一份快照再切回 UI 线程。
+   */
+  private copyState(state: VehicleState): VehicleState {
+    const copy = new VehicleState();
+    copy.vin = state.vin;
+    copy.modelName = state.modelName;
+    copy.contentCodes = state.contentCodes;
+    copy.batteryCapacityKwh = state.batteryCapacityKwh;
+    copy.battery = state.battery;
+    copy.range = state.range;
+    copy.charging = state.charging;
+    copy.chargerConnection = state.chargerConnection;
+    copy.chargingType = state.chargingType;
+    copy.powerWatts = state.powerWatts;
+    copy.currentAmps = state.currentAmps;
+    copy.timeToFullMinutes = state.timeToFullMinutes;
+    copy.tripManualAverageEnergyKwhPer100Km = state.tripManualAverageEnergyKwhPer100Km;
+    copy.tripAutomaticAverageEnergyKwhPer100Km = state.tripAutomaticAverageEnergyKwhPer100Km;
+    copy.tripSinceChargeAverageEnergyKwhPer100Km = state.tripSinceChargeAverageEnergyKwhPer100Km;
+    copy.tripManualEnergyWh = state.tripManualEnergyWh;
+    copy.tripAutomaticEnergyWh = state.tripAutomaticEnergyWh;
+    copy.tripSinceChargeEnergyWh = state.tripSinceChargeEnergyWh;
+    copy.climate = state.climate;
+    copy.climateRuntimeMinutes = state.climateRuntimeMinutes;
+    copy.air = state.air;
+    copy.airQualityIndex = state.airQualityIndex;
+    copy.pm25UgM3 = state.pm25UgM3;
+    copy.airRuntimeMinutes = state.airRuntimeMinutes;
+    copy.locked = state.locked;
+    copy.windows = state.windows;
+    copy.tailgate = state.tailgate;
+    copy.tailgateLock = state.tailgateLock;
+    copy.hoodState = state.hoodState;
+    copy.chargePortState = state.chargePortState;
+    copy.doorStates = state.doorStates.slice();
+    copy.windowStates = state.windowStates.slice();
+    copy.odometerKm = state.odometerKm;
+    copy.tripManualKm = state.tripManualKm;
+    copy.tripAutomaticKm = state.tripAutomaticKm;
+    copy.tripSinceChargeKm = state.tripSinceChargeKm;
+    copy.manualAverageSpeedKph = state.manualAverageSpeedKph;
+    copy.automaticAverageSpeedKph = state.automaticAverageSpeedKph;
+    copy.sinceChargeAverageSpeedKph = state.sinceChargeAverageSpeedKph;
+    return copy;
+  }
+
+  /**
+   * 在 UI 线程上应用一帧流式状态。
+   *
+   * 按域只更新该域涉及的字段 —— 其余域的推送不该把别的域覆盖成旧值。
+   */
+  private applyStreamState(domain: StateDomain, state: VehicleState): void {
+    switch (domain) {
+      case 'battery':
+        this.battery = state.battery ?? -1;
+        this.range = state.range ?? -1;
+        this.charging = state.charging;
+        this.chargerConnection = state.chargerConnection;
+        this.chargingType = state.chargingType;
+        this.powerWatts = state.powerWatts ?? 0;
+        this.currentAmps = state.currentAmps ?? 0;
+        this.remainingMinutes = state.timeToFullMinutes ?? 0;
+        this.manualAverageEnergyKwhPer100Km = state.tripManualAverageEnergyKwhPer100Km ?? -1;
+        this.automaticAverageEnergyKwhPer100Km = state.tripAutomaticAverageEnergyKwhPer100Km ?? -1;
+        this.sinceChargeAverageEnergyKwhPer100Km = state.tripSinceChargeAverageEnergyKwhPer100Km ?? -1;
+        this.manualEnergyWh = state.tripManualEnergyWh ?? -1;
+        this.automaticEnergyWh = state.tripAutomaticEnergyWh ?? -1;
+        this.sinceChargeEnergyWh = state.tripSinceChargeEnergyWh ?? -1;
+        this.syncChargeTimer();
+        this.publishCard();
+        break;
+      case 'climate':
+        this.climate = state.climate;
+        this.climateRemainingMinutes = state.climateRuntimeMinutes ?? -1;
+        this.applyStreamPhase(ToggleKind.CLIMATE, state.climate, '开启', '关闭');
+        this.syncClimateTimer();
+        this.publishCard();
+        break;
+      case 'air':
+        this.airQualityIndex = state.airQualityIndex ?? -1;
+        this.pm25UgM3 = state.pm25UgM3 ?? -1;
+        this.airRemainingMinutes = state.airRuntimeMinutes ?? -1;
+        this.applyStreamPhase(ToggleKind.PURIFIER, state.air, '开启', '关闭');
+        this.syncClimateTimer();
+        break;
+      case 'exterior':
+        this.locked = state.locked;
+        this.windows = state.windows;
+        this.windowStates = state.windowStates;
+        this.doorStates = state.doorStates;
+        this.hoodOpen = state.hoodState === 1 || state.hoodState === 3;
+        this.portOpen = state.chargePortState === 1 || state.chargePortState === 3;
+        this.applyStreamPhase(ToggleKind.LOCK, state.locked, '未锁', '已锁');
+        this.applyStreamPhase(ToggleKind.WINDOW, state.windows, '车窗未关闭', '车窗已关闭');
+        if (state.tailgateLock === '未锁') {
+          this.trunkUnlocked = true;
+        } else if (state.tailgateLock === '已锁') {
+          this.trunkUnlocked = false;
+        }
+        this.applyStreamPhase(ToggleKind.TRUNK_LOCK, state.tailgateLock, '未锁', '已锁');
+        this.applyStreamPhase(ToggleKind.TRUNK, state.tailgate, '已打开', '已关闭');
+        this.publishCard();
+        break;
+      case 'odometer':
+        this.odometerKm = state.odometerKm ?? -1;
+        this.tripManualKm = state.tripManualKm ?? -1;
+        this.tripAutomaticKm = state.tripAutomaticKm ?? -1;
+        this.tripSinceChargeKm = state.tripSinceChargeKm ?? -1;
+        this.manualAverageSpeedKph = state.manualAverageSpeedKph ?? -1;
+        this.automaticAverageSpeedKph = state.automaticAverageSpeedKph ?? -1;
+        this.sinceChargeAverageSpeedKph = state.sinceChargeAverageSpeedKph ?? -1;
+        break;
+      default:
+        break;
+    }
+  }
+
+  /**
+   * 用流式推送的车端状态更新开关相位。
+   *
+   * 执行中 / 验证中不覆盖 —— 指令刚下发、车端还没推进到终态，
+   * 此时推来的多半是执行前的旧值，覆盖会把按钮弹回去。
+   *
+   * 正在等推送确认时，状态到达目标态即落定并结束等待；
+   * 未到目标态则继续等（车端还没生效）。
+   *
+   * @param kind    开关语义类型
+   * @param actual  车端当前状态文案
+   * @param onText  「开启」对应的状态文案
+   * @param offText 「关闭」对应的状态文案
+   */
+  private applyStreamPhase(kind: ToggleKind, actual: string,
+    onText: string, offText: string): void {
+    const current = this.phaseOf(kind);
+    if (current === TogglePhase.PENDING || current === TogglePhase.VERIFYING) {
+      return;
+    }
+
+    const reached: boolean = actual === onText
+      ? this.pendingConfirmTarget === TogglePhase.ON
+      : (actual === offText && this.pendingConfirmTarget === TogglePhase.OFF);
+
+    // 正在等这个开关的推送确认
+    if (this.pendingConfirmKind === kind) {
+      if (reached) {
+        this.pendingConfirmKind = undefined;
+        this.settleToggle(kind, this.pendingConfirmTarget);
+        this.toast(`${this.toggleLabel(kind)}已${this.pendingConfirmTarget === TogglePhase.ON ? '开启' : '关闭'}`);
+      }
+      return;
+    }
+
+    if (actual === onText) {
+      this.setPhase(kind, TogglePhase.ON);
+    } else if (actual === offText) {
+      this.setPhase(kind, TogglePhase.OFF);
     }
   }
 
@@ -1715,8 +2040,8 @@ struct Index {
           Log.warn(`车控执行失败：${message}`);
           return;
         }
-        // 指令已下发，状态待确认：由 confirmToggle 轮询车端后落定
-        this.confirmToggle(kind, action, prev);
+        // 指令已下发，状态待确认：由 confirmToggle 等车端状态确认后落定
+        this.confirmToggle(kind, prev);
         // 从概览页关掉驻车空调，等同于结束露营模式 ——
         // 露营模式是靠空调在跑支撑的，空调没了倒计时就没有意义了。
         if (kind === ToggleKind.CLIMATE && action === VehicleCommands.ACTION_CLIMATE_STOP &&
@@ -1856,64 +2181,139 @@ struct Index {
    * 关键：开启空调后车端在真正启动前，状态仍是「关闭」。若把「关闭」当终态
    * 立即落定，UI 就会立刻弹回关闭态 —— 这正是原版按动作判定的原因。
    *
+   * 状态流可用时改用流来确认 —— 服务端会在车端状态变化时推一帧，
+   * 比轮询更快，也不会出现「轮询读到的旧值」与「流推来的新值」互相打架。
+   *
    * 超过预算（12 秒）仍未确认，则按目标状态落定：指令确实已下发成功，
    * 只是车端还没推进到终态，不应把 UI 弹回原状态。
    */
-  private async confirmToggle(kind: ToggleKind, action: string, prev: TogglePhase): Promise<void> {
+  private async confirmToggle(kind: ToggleKind, prev: TogglePhase): Promise<void> {
     const budgetMs: number = 12000;
-    const startedAt: number = Date.now();
-    let interval: number = 300;
     const target: TogglePhase = prev === TogglePhase.ON ? TogglePhase.OFF : TogglePhase.ON;
 
+    // 流式可用时挂起等待，由推送来确认
+    if (this.streamReadyFor(kind)) {
+      this.pendingConfirmKind = kind;
+      this.pendingConfirmTarget = target;
+      await this.waitStreamConfirm(kind, target, budgetMs);
+      this.pendingConfirmKind = undefined;
+      return;
+    }
+
+    await this.confirmToggleByPolling(kind, target, budgetMs);
+  }
+
+  /**
+   * 该开关对应的状态域是否已收到过推送。
+   *
+   * 只有收到过推送才说明「服务端会推这个域」，才能靠推送来确认指令生效。
+   */
+  private streamReadyFor(kind: ToggleKind): boolean {
+    if (kind === ToggleKind.CLIMATE) {
+      return this.climatePrimed;
+    }
+    if (kind === ToggleKind.PURIFIER) {
+      return this.airPrimed;
+    }
+    if (kind === ToggleKind.LOCK || kind === ToggleKind.WINDOW ||
+      kind === ToggleKind.TRUNK || kind === ToggleKind.TRUNK_LOCK) {
+      return this.exteriorPrimed;
+    }
+    return false;
+  }
+
+  /**
+   * 等待流式推送确认指令生效。
+   *
+   * 推送到达时 applyStreamPhase 会比对目标状态，命中就落定并结束等待。
+   *
+   * @param kind     开关语义类型
+   * @param target   目标状态
+   * @param budgetMs 最长等待时长
+   */
+  private async waitStreamConfirm(kind: ToggleKind, target: TogglePhase,
+    budgetMs: number): Promise<void> {
+    const startedAt: number = Date.now();
+    while (Date.now() - startedAt < budgetMs) {
+      if (this.pendingConfirmKind !== kind) {
+        // 已被推送确认并落定
+        return;
+      }
+      // 流断了就没法再等到推送确认，退回轮询路径继续等
+      if (!this.streamReadyFor(kind)) {
+        Log.warn('状态流已断开，指令确认改走轮询');
+        this.pendingConfirmKind = undefined;
+        await this.confirmToggleByPolling(kind, target, budgetMs);
+        return;
+      }
+      await this.delay(200);
+    }
+    // 超时未确认：按目标状态落定（指令已成功下发，只是车端还没推进到终态）
+    Log.warn(`车控状态未在 ${budgetMs}ms 内被推送确认，按下发结果落定`);
+    this.pendingConfirmKind = undefined;
+    this.settleToggle(kind, target);
+    this.toast(`${this.toggleLabel(kind)}指令已发送`);
+  }
+
+  /**
+   * 轮询确认指令生效。
+   *
+   * 与 confirmToggle 的轮询分支同逻辑，单独拆出来是因为
+   * 「流式确认中途断流」需要在中途切回这条路径。
+   *
+   * @param kind     开关语义类型
+   * @param target   目标状态
+   * @param budgetMs 剩余预算
+   */
+  private async confirmToggleByPolling(kind: ToggleKind, target: TogglePhase,
+    budgetMs: number): Promise<void> {
+    const startedAt: number = Date.now();
+    let interval: number = 300;
     while (Date.now() - startedAt < budgetMs) {
       await this.delay(interval);
       interval = Math.min(1200, interval + 250);
-
       try {
         const current = await this.readToggleState(kind);
-        if (current === undefined) {
-          // 状态不可判定（如「处理中」），继续等
+        if (current === undefined || current !== target) {
           continue;
         }
-        if (current !== target) {
-          // 还没到目标态（例：开启空调后车端仍返回「关闭」），继续等
-          continue;
-        }
-        this.setPhase(kind, target);
-        // 整车解锁会连带解锁尾门，但车端两个状态不一定同时推送，
-        // 落定后再读一次 exterior 把尾门锁状态补齐。
-        if (kind === ToggleKind.LOCK) {
-          this.syncTrunkLock();
-        } else if (kind === ToggleKind.WINDOW) {
-          // 四扇窗可能不是同时落地的，落定时车模可能还停在中间状态。
-          this.syncWindowStates();
-        } else if (kind === ToggleKind.TRUNK || kind === ToggleKind.TRUNK_LOCK) {
-          // 尾门的开合与锁止是同一批字段，顺手一起补齐。
-          this.syncTrunkLock();
-        } else if (kind === ToggleKind.CLIMATE || kind === ToggleKind.PURIFIER) {
-          // 空调 / 净化开启后要持续轮询，等车端到时自动关闭时回落按钮
-          this.syncClimateTimer();
-        }
+        this.settleToggle(kind, target);
         this.toast(`${this.toggleLabel(kind)}已${target === TogglePhase.ON ? '开启' : '关闭'}`);
         return;
       } catch (err) {
-        // 单次读取失败不终止轮询
         Log.warn(`确认车控状态失败: ${(err as Error).message}`);
       }
     }
+    this.settleToggle(kind, target);
+    this.toast(`${this.toggleLabel(kind)}指令已发送`);
+  }
 
-    // 超时未确认：按目标状态落定（指令已成功下发）
-    Log.warn(`车控状态未在 ${budgetMs}ms 内确认，按下发结果落定: ${action}`);
+  /**
+   * 指令生效后的落定处理。
+   *
+   * 除了写相位，还要把相关联的展示补齐 ——
+   * 整车解锁会连带解锁尾门，但车端两个状态不一定同时推送；
+   * 四扇窗也可能是分批落地的。
+   *
+   * 状态流可用时不做额外读取：推送会自己把尾门锁 / 逐扇车窗带过来，
+   * 再读一次反而可能用旧值覆盖新推来的状态。
+   */
+  private settleToggle(kind: ToggleKind, target: TogglePhase): void {
     this.setPhase(kind, target);
+    if (kind === ToggleKind.CLIMATE || kind === ToggleKind.PURIFIER) {
+      this.syncClimateTimer();
+      return;
+    }
+    if (this.exteriorPrimed) {
+      return;
+    }
     if (kind === ToggleKind.LOCK) {
       this.syncTrunkLock();
     } else if (kind === ToggleKind.WINDOW) {
-      // 逐扇车窗状态可能已经更新过一轮，再读一次拿最新的。
       this.syncWindowStates();
-    } else if (kind === ToggleKind.CLIMATE || kind === ToggleKind.PURIFIER) {
-      this.syncClimateTimer();
+    } else if (kind === ToggleKind.TRUNK || kind === ToggleKind.TRUNK_LOCK) {
+      this.syncTrunkLock();
     }
-    this.toast(`${this.toggleLabel(kind)}指令已发送`);
   }
 
   /**

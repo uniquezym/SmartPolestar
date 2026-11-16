@@ -25,8 +25,34 @@ export class GrpcClient {
   static readonly SERVICE_CLIMATE_TIMER: string = 'chronos.services.v1.ParkingClimateTimerService';
   static readonly SERVICE_DTL_INTERNET: string = 'dtlinternet.DtlInternetService';
 
+  /**
+   * 服务端流方法名 —— 对应各服务的 SERVER_STREAMING 方法。
+   *
+   * 每个状态服务都有「流式 + 快照」两条路：
+   *   GetExterior          (SERVER_STREAMING) —— 车端状态一变就推一帧
+   *   GetLatestExterior   (UNARY)           —— 一次性快照
+   *
+   * 原版 Android 走的是流式那条路，因此能秒级感知车端变化，
+   * 不必像我们这样靠定时轮询。
+   */
+  static readonly STREAM_METHOD_EXTERIOR: string = 'GetExterior';
+  static readonly STREAM_METHOD_BATTERY: string = 'GetBattery';
+  static readonly STREAM_METHOD_CLIMATIZATION: string = 'GetParkingClimatization';
+  static readonly STREAM_METHOD_PRECLEANING: string = 'GetPreCleaning';
+  static readonly STREAM_METHOD_ODOMETER: string = 'GetOdometer';
+  static readonly STREAM_METHOD_HEALTH: string = 'GetHealth';
+
   /** 单次调用默认超时（毫秒）。 */
   static readonly DEFAULT_TIMEOUT_MS: number = 12000;
+
+  /**
+   * 服务端流重连参数 —— 对齐原版 RetryPolicyKt。
+   *
+   * 原版：最大 3 次尝试，初始延迟 1000ms，退避倍数 2。
+   */
+  static readonly STREAM_MAX_ATTEMPTS: number = 3;
+  static readonly STREAM_RETRY_BASE_MS: number = 1000;
+  static readonly STREAM_RETRY_MULTIPLIER: number = 2;
 
   /** 空调定时相关调用的超时（毫秒）。 */
   static readonly TIMER_TIMEOUT_MS: number = 20000;
@@ -35,6 +61,14 @@ export class GrpcClient {
   private session: SessionState | undefined = undefined;
   /** 按主机缓存的通道。 */
   private channels: Map<string, GrpcRcpChannel> = new Map();
+  /** 正在进行的 token 续期，用于串行化并发续期。 */
+  private refreshing: Promise<void> | undefined = undefined;
+  /**
+   * 流彻底不可用时的回调（重试用尽或鉴权失效）。
+   *
+   * 由上层（VehicleRepository）设置，用来决定是放弃还是提示用户。
+   */
+  onStreamFatal?: (fullMethod: string, message: string) => void;
 
   constructor(context: common.UIAbilityContext, session: SessionState) {
     this.context = context;
@@ -129,6 +163,219 @@ export class GrpcClient {
   }
 
   /**
+   * 订阅一个服务端流式状态。
+   *
+   * 与原版 Android 的 Flow 订阅等价：
+   *   - 请求体与快照方法完全一致（field 1 = UUID，field 2 = VIN）
+   *   - 服务端在车端状态变化时主动往同一条流里写新的一帧
+   *   - 断流后按指数退避重连（对齐原版 RetryPolicy：3 次尝试，1s 起步，×2）
+   *
+   * 三种回调要分清：
+   *   onMessage    收到一帧数据
+   *   onDisconnect 流断开（可能是暂时的，正在安排重连）
+   *   onFatal     重试用尽或鉴权续期仍失败，这条流不会再自动恢复
+   *
+   * @param service      服务全名，如 `services.vehiclestates.exterior.ExteriorService`
+   * @param method       流式方法名，如 `GetExterior`
+   * @param vin          车辆 VIN
+   * @param onMessage    每收到一帧时回调（裸 protobuf）
+   * @param onDisconnect 流断开时回调（会尝试重连）
+   * @param onFatal      流彻底不可用时回调
+   * @returns 取消订阅的函数
+   */
+  callStream(service: string, method: string, vin: string,
+    onMessage: (message: Uint8Array) => void,
+    onDisconnect: (message: string) => void,
+    onFatal: (message: string) => void): () => void {
+    if (this.session === undefined) {
+      onFatal('会话未初始化');
+      return (): void => {};
+    }
+
+    const host = this.session.c3Host;
+    if (host.length === 0) {
+      onFatal('C3 主机未解析，请先完成服务发现');
+      return (): void => {};
+    }
+
+    const fullMethod = `${service}/${method}`;
+
+    let cancelCurrent: (() => void) | undefined = undefined;
+    let stopped = false;
+    let attempt = 0;
+    let retryTimer: number = -1;
+
+    /**
+     * 拉起一条流。
+     */
+    const start = (): void => {
+      if (stopped) {
+        return;
+      }
+      const channel = this.channel(host);
+      const session = this.session;
+      const token = session !== undefined ? session.accessToken : '';
+
+      cancelCurrent = channel.callStream(fullMethod, token, vin,
+        GrpcClient.buildStreamRequest(vin),
+        (message: Uint8Array) => {
+          // 收到数据说明流是活的，重置重试计数
+          attempt = 0;
+          onMessage(message);
+        },
+        (error: string | null) => {
+          cancelCurrent = undefined;
+          if (stopped) {
+            return;
+          }
+          if (error === null) {
+            // 服务端正常关闭了流，也要重连 —— 车端状态还需要持续跟踪
+            Log.info(`gRPC 流 ${fullMethod} 被服务端关闭，准备重连`);
+            onDisconnect('服务端关闭了流');
+          } else {
+            Log.warn(`gRPC 流 ${fullMethod} 断开: ${error}`);
+            onDisconnect(error);
+          }
+          this.scheduleReconnect(fullMethod, start, error, attempt, (delay: number) => {
+            retryTimer = setTimeout(() => {
+              retryTimer = -1;
+              attempt++;
+              start();
+            }, delay);
+          }, onFatal);
+        });
+    };
+
+    start();
+    return (): void => {
+      stopped = true;
+      if (retryTimer !== -1) {
+        clearTimeout(retryTimer);
+        retryTimer = -1;
+      }
+      if (cancelCurrent !== undefined) {
+        cancelCurrent();
+        cancelCurrent = undefined;
+      }
+    };
+  }
+
+  /**
+   * 流断开后的退避重连。
+   *
+   * 对齐原版 RetryPolicyKt：最多 3 次尝试，初始延迟 1 秒，倍数 2（1s → 2s → 4s）。
+   * 超过上限后通知调用方，由上层决定是否放弃。
+   *
+   * 鉴权失败时先续期 token 再重连 —— 拿旧 token 重连只会连续被拒。
+   * 续期也失败（登录态真的没了）才判定为彻底不可用。
+   */
+  private scheduleReconnect(fullMethod: string, start: () => void, error: string | null,
+    attempt: number, schedule: (delay: number) => void, onFatal: (message: string) => void): void {
+    if (error !== null && GrpcClient.isUnauthenticatedMessage(error)) {
+      Log.warn(`gRPC 流 ${fullMethod} 鉴权失效，尝试续期 token`);
+      this.refreshForStream(fullMethod, error, start, onFatal);
+      return;
+    }
+
+    if (attempt >= GrpcClient.STREAM_MAX_ATTEMPTS) {
+      Log.error(`gRPC 流 ${fullMethod} 重连 ${attempt} 次仍失败，放弃`);
+      const message = error ?? '服务端关闭了流';
+      onFatal(message);
+      this.onStreamFatal?.(fullMethod, message);
+      return;
+    }
+
+    const delay = GrpcClient.STREAM_RETRY_BASE_MS * Math.pow(GrpcClient.STREAM_RETRY_MULTIPLIER, attempt);
+    Log.info(`gRPC 流 ${fullMethod} ${delay}ms 后重连（第 ${attempt + 1} 次）`);
+    schedule(delay);
+  }
+
+  /**
+   * 续期 token 后重连流。
+   *
+   * 长连接的 token 会被服务端在连接期间校验，token 过期时流会被断开。
+   * 续期成功后用新 token 重连；续期失败说明登录态真的没了，
+   * 这时通知上层退回轮询（轮询路径会走 401 处理，把用户带回登录页）。
+   */
+  private refreshForStream(fullMethod: string, error: string,
+    start: () => void, onFatal: (message: string) => void): void {
+    const context = this.context;
+    const session = this.session;
+    if (context === undefined || session === undefined) {
+      onFatal(error);
+      this.onStreamFatal?.(fullMethod, error);
+      return;
+    }
+
+    this.refreshTokenOnce().then(() => {
+      Log.info(`gRPC 流 ${fullMethod} token 已续期，立即重连`);
+      start();
+    }).catch((err: BusinessError) => {
+      Log.error(`gRPC 流 ${fullMethod} token 续期失败: ${err.message}`);
+      onFatal(err.message);
+      this.onStreamFatal?.(fullMethod, err.message);
+    });
+  }
+
+  /**
+   * 强制续期 token，同一时刻只跑一次。
+   *
+   * 六个状态流会在同一刻先后被服务端判定鉴权失效。
+   * 续期接口会轮换 refresh token，并发调用会让服务端把旧的那个作废，
+   * 反而把用户踢出登录 —— 因此必须串行化。
+   */
+  private refreshTokenOnce(): Promise<void> {
+    const context = this.context;
+    const session = this.session;
+    if (context === undefined || session === undefined) {
+      return Promise.reject(new BusinessError(-1, '会话未初始化'));
+    }
+    if (this.refreshing !== undefined) {
+      return this.refreshing;
+    }
+    const task = AuthService.refreshIfNeeded(context, session, true);
+    this.refreshing = task;
+    return task.finally(() => {
+      this.refreshing = undefined;
+    });
+  }
+
+  /**
+   * 构造服务端流的请求体。
+   *
+   * 与快照方法一致：field 1 = 请求 UUID，field 2 = VIN。
+   */
+  private static buildStreamRequest(vin: string): Uint8Array {
+    const uuidBytes = GrpcClient.utf8(GrpcClient.newUuid());
+    const vinBytes = GrpcClient.utf8(vin);
+    const payload = new Uint8Array(uuidBytes.length + vinBytes.length + 4);
+
+    let offset = 0;
+    // field 1 = request id
+    payload[offset++] = 0x0a;
+    payload[offset++] = uuidBytes.length;
+    payload.set(uuidBytes, offset);
+    offset += uuidBytes.length;
+    // field 2 = VIN
+    payload[offset++] = 0x12;
+    payload[offset++] = vinBytes.length;
+    payload.set(vinBytes, offset);
+
+    return payload;
+  }
+
+  /**
+   * 生成 UUID v4。
+   */
+  private static newUuid(): string {
+    return 'xxxxxxxx-xxxx-4xxx-yyyy-xxxxxxxxxxxx'.replace(/[xy]/g, (c: string) => {
+      const r = Math.random() * 16 | 0;
+      const v = c === 'x' ? r : (r & 0x3 | 0x8);
+      return v.toString(16);
+    });
+  }
+
+  /**
    * 判断异常是否为鉴权失败（需要续期 token 后重试）。
    *
    * 两种表现都要认：
@@ -141,7 +388,15 @@ export class GrpcClient {
    * 续期重试永远不触发，token 一过期所有请求就全部报错。
    */
   static isUnauthenticated(err: BusinessError): boolean {
-    const message = err.message;
+    return GrpcClient.isUnauthenticatedMessage(err.message);
+  }
+
+  /**
+   * 按消息文本判断是否为鉴权失败。
+   *
+   * 拆出来是因为流式重连拿到的是纯字符串，没有 BusinessError 包装。
+   */
+  static isUnauthenticatedMessage(message: string | undefined): boolean {
     if (message === undefined || message.length === 0) {
       return false;
     }

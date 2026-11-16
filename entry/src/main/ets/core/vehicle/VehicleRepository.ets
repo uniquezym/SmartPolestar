@@ -7,6 +7,7 @@ import { SessionState } from '../model/SessionState';
 import { SessionStore } from '../session/SessionStore';
 import { AuthService } from '../session/AuthService';
 import { VehicleState } from '../model/VehicleState';
+import { StateDomain, VehicleStateStream } from './VehicleStateStream';
 import { BusinessError, Log } from '../../common/Log';
 
 /**
@@ -20,6 +21,15 @@ export class VehicleRepository {
   private client: GrpcClient | undefined = undefined;
   /** 账号下的车辆 VIN 列表。 */
   private vins: string[] = [];
+  /** 流式状态订阅器。 */
+  private stream: VehicleStateStream | undefined = undefined;
+
+  /**
+   * 状态流彻底不可用时的回调（重试用尽或鉴权失效）。
+   *
+   * 由页面设置，用来决定是退回到定时轮询还是提示用户。
+   */
+  onStreamBroken?: (fullMethod: string, message: string) => void;
 
   constructor(context: common.UIAbilityContext) {
     this.context = context;
@@ -226,6 +236,7 @@ export class VehicleRepository {
    * 退出登录。
    */
   async logout(): Promise<void> {
+    this.stopStream();
     if (this.client !== undefined) {
       this.client.close();
       this.client = undefined;
@@ -233,5 +244,69 @@ export class VehicleRepository {
     this.session = undefined;
     this.vins = [];
     await SessionStore.clear(this.context);
+  }
+
+  // ---------- 服务端流式状态 ----------
+
+  /**
+   * 订阅车辆状态的流式推送。
+   *
+   * 订阅后服务端在车端状态变化时主动推送新的一帧，
+   * 不需要再靠定时轮询感知变化 —— 这是原版 Android 的做法。
+   *
+   * @param vin     车辆 VIN
+   * @param onUpdate 某个域更新时回调
+   * @returns 当前共享的状态对象
+   */
+  async startStream(vin: string,
+    onUpdate: (domain: StateDomain, state: VehicleState) => void): Promise<VehicleState> {
+    const client = await this.prepare();
+    const state = new VehicleState();
+    state.vin = vin;
+
+    this.stopStream();
+
+    const stream = new VehicleStateStream(client, vin, state);
+    stream.onUpdate = (domain: StateDomain, updated: VehicleState) => {
+      onUpdate(domain, updated);
+    };
+    stream.onStreamError = (domain: StateDomain, message: string) => {
+      Log.warn(`状态流(${domain})断开，正在重连: ${message}`);
+    };
+    stream.onStreamFatal = (domain: StateDomain, message: string) => {
+      Log.error(`状态流(${domain})彻底不可用: ${message}`);
+      // 全部断开才算流式通道整体失效 —— 单条流挂掉还能靠其余流维持。
+      if (stream.isAllBroken()) {
+        this.onStreamBroken?.('', message);
+      }
+    };
+    this.stream = stream;
+    stream.start();
+
+    // 订阅阶段就全部失败（例如主机未解析 / 会话失效）：
+    // 这时不能算订阅成功，抛出去让调用方退回轮询兜底。
+    if (stream.isAllBroken()) {
+      this.stream = undefined;
+      throw new BusinessError(-1, '状态流订阅失败，已退回定时轮询');
+    }
+
+    return state;
+  }
+
+  /**
+   * 停止流式订阅。
+   */
+  stopStream(): void {
+    if (this.stream !== undefined) {
+      this.stream.stop();
+      this.stream = undefined;
+    }
+  }
+
+  /**
+   * 流式订阅是否在运行。
+   */
+  isStreamRunning(): boolean {
+    return this.stream !== undefined && this.stream.isRunning();
   }
 }

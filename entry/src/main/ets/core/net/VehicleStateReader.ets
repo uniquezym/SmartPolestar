@@ -45,6 +45,16 @@ export class VehicleStateReader {
    */
   static async readBattery(client: GrpcClient, vin: string, state: VehicleState): Promise<void> {
     const response = await client.callStatus(GrpcClient.SERVICE_BATTERY, 'GetLatestBattery', vin);
+    VehicleStateReader.applyBattery(response, state);
+  }
+
+  /**
+   * 把电池 / 充电响应映射到状态对象。
+   *
+   * 快照（GetLatestBattery）与流式（GetBattery）的响应结构完全相同，
+   * 因此映射逻辑只需一份 —— 快照与流共用。
+   */
+  static applyBattery(response: Uint8Array, state: VehicleState): void {
     const fields = VehicleStateReader.unwrap(response, 3);
 
     state.battery = ProtoValue.asInteger(ProtoValue.get(fields, 2));
@@ -81,6 +91,13 @@ export class VehicleStateReader {
    */
   static async readExterior(client: GrpcClient, vin: string, state: VehicleState): Promise<void> {
     const response = await client.callStatus(GrpcClient.SERVICE_EXTERIOR, 'GetLatestExterior', vin);
+    VehicleStateReader.applyExterior(response, state);
+  }
+
+  /**
+   * 把外饰响应映射到状态对象。
+   */
+  static applyExterior(response: Uint8Array, state: VehicleState): void {
     const fields = VehicleStateReader.unwrap(response, 3);
 
     state.locked = VehicleState.enumLabel(ProtoValue.asInteger(ProtoValue.get(fields, 2)), LOCK_LABELS);
@@ -112,6 +129,13 @@ export class VehicleStateReader {
   static async readClimate(client: GrpcClient, vin: string, state: VehicleState): Promise<void> {
     const response = await client.callStatus(
       GrpcClient.SERVICE_CLIMATIZATION, 'GetLatestParkingClimatization', vin);
+    VehicleStateReader.applyClimate(response, state);
+  }
+
+  /**
+   * 把驻车空调响应映射到状态对象。
+   */
+  static applyClimate(response: Uint8Array, state: VehicleState): void {
     const fields = VehicleStateReader.unwrap(response, 3);
 
     state.climate = VehicleState.enumLabel(ProtoValue.asInteger(ProtoValue.get(fields, 2)), CLIMATE_LABELS);
@@ -132,6 +156,13 @@ export class VehicleStateReader {
   static async readAir(client: GrpcClient, vin: string, state: VehicleState): Promise<void> {
     const response = await client.callStatus(
       GrpcClient.SERVICE_PRECLEANING, 'GetLatestPreCleaning', vin);
+    VehicleStateReader.applyAir(response, state);
+  }
+
+  /**
+   * 把空气净化响应映射到状态对象。
+   */
+  static applyAir(response: Uint8Array, state: VehicleState): void {
     const fields = VehicleStateReader.unwrap(response, 3);
 
     state.air = VehicleState.enumLabel(ProtoValue.asInteger(ProtoValue.get(fields, 6)), AIR_LABELS);
@@ -148,6 +179,13 @@ export class VehicleStateReader {
    */
   static async readOdometer(client: GrpcClient, vin: string, state: VehicleState): Promise<void> {
     const response = await client.callStatus(GrpcClient.SERVICE_ODOMETER, 'GetLatestOdometer', vin);
+    VehicleStateReader.applyOdometer(response, state);
+  }
+
+  /**
+   * 把里程响应映射到状态对象。
+   */
+  static applyOdometer(response: Uint8Array, state: VehicleState): void {
     const fields = VehicleStateReader.unwrap(response, 3);
 
     // 总里程：原始单位为米，按 m1352I 取整数后除以 1000 换算为公里
@@ -184,6 +222,13 @@ export class VehicleStateReader {
    */
   static async readHealth(client: GrpcClient, vin: string, state: VehicleState): Promise<void> {
     const response = await client.callStatus(GrpcClient.SERVICE_HEALTH, 'GetLatestHealth', vin);
+    VehicleStateReader.applyHealth(response, state);
+  }
+
+  /**
+   * 把健康响应映射到状态对象。
+   */
+  static applyHealth(response: Uint8Array, state: VehicleState): void {
     const fields = VehicleStateReader.unwrap(response, 3);
 
     // 还原自 y90 的 health 分支：保养状态取 field 5，
