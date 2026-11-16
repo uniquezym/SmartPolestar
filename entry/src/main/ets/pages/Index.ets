@@ -189,6 +189,8 @@ struct Index {
   @State airQualityIndex: number = -1;
   /** PM2.5 浓度（μg/m³），-1 表示未知。控制页空气净化卡片用。 */
   @State pm25UgM3: number = -1;
+  /** 逐项健康告警文案，为空表示没有异常。 */
+  @State healthWarnings: string[] = [];
 
   /** 尾门解锁态 —— 车模尾门标记点显示警示色。 */
   @State trunkUnlocked: boolean = false;
@@ -1015,6 +1017,7 @@ struct Index {
     copy.manualAverageSpeedKph = state.manualAverageSpeedKph;
     copy.automaticAverageSpeedKph = state.automaticAverageSpeedKph;
     copy.sinceChargeAverageSpeedKph = state.sinceChargeAverageSpeedKph;
+    copy.healthWarnings = state.healthWarnings.slice();
     return copy;
   }
 
@@ -1089,6 +1092,9 @@ struct Index {
         this.manualAverageSpeedKph = state.manualAverageSpeedKph ?? -1;
         this.automaticAverageSpeedKph = state.automaticAverageSpeedKph ?? -1;
         this.sinceChargeAverageSpeedKph = state.sinceChargeAverageSpeedKph ?? -1;
+        break;
+      case 'health':
+        this.healthWarnings = state.healthWarnings.slice();
         break;
       default:
         break;
@@ -1392,6 +1398,9 @@ struct Index {
     this.airQualityIndex = state.airQualityIndex ?? -1;
     this.pm25UgM3 = state.pm25UgM3 ?? -1;
     this.syncClimateTimer();
+
+    // 健康告警：状态行最高优先级。
+    this.healthWarnings = state.healthWarnings.slice();
   }
 
   /**
@@ -1616,6 +1625,176 @@ struct Index {
       return `${this.batteryCapacityKwh.toFixed(0)} kWh`;
     }
     return '极星2';
+  }
+
+  // ---------- 车模下方状态行 ----------
+
+  /**
+   * 状态行的级别，决定配色。
+   *
+   * 0 = 无状态（回落车型副文本）
+   * 1 = 正常运行中（充电 / 露营 / 空调 / 净化）—— 品牌蓝
+   * 2 = 需要关注（充电故障）—— 错误色
+   * 3 = 车辆异常（健康告警）—— 警示色
+   */
+  private statusLevel(): number {
+    // 异常优先级最高 —— 异常需要用户立即处理，不能被充电信息盖住。
+    if (this.healthWarnings.length > 0) {
+      return 3;
+    }
+    const stage = this.chargeStage();
+    if (stage === ChargeStage.FAULT) {
+      return 2;
+    }
+    if (stage !== ChargeStage.IDLE && stage !== ChargeStage.DISCHARGING) {
+      return 1;
+    }
+    if (this.sessionStatusText().length > 0) {
+      return 1;
+    }
+    return 0;
+  }
+
+  /**
+   * 状态行文案。
+   *
+   * 空串表示没有需要显示的状态 —— 此时回落到车型副文本。
+   */
+  private statusLineText(): string {
+    const level = this.statusLevel();
+    if (level === 3) {
+      return this.healthWarningText();
+    }
+    if (level === 2) {
+      return this.chargerConnection === '连接故障' ? '充电连接故障' : '充电错误';
+    }
+    if (level === 1) {
+      const stage = this.chargeStage();
+      if (stage !== ChargeStage.IDLE && stage !== ChargeStage.DISCHARGING) {
+        return this.chargeStatusText();
+      }
+      return this.sessionStatusText();
+    }
+    return '';
+  }
+
+  /**
+   * 充电状态文案。
+   *
+   * 充电中给完整的功率 / 电流 / 剩余时间，
+   * 其余阶段给一句话概括。
+   */
+  private chargeStatusText(): string {
+    const stage = this.chargeStage();
+    if (stage === ChargeStage.COMPLETED) {
+      return '充电已完成';
+    }
+    if (stage === ChargeStage.PAUSED) {
+      return '充电已暂停';
+    }
+    if (stage === ChargeStage.PLUGGED) {
+      return '充电枪已连接';
+    }
+    // 充电中：功率 · 电流 · 充满剩余时间
+    const parts: string[] = [];
+    const power = this.powerText();
+    if (power.length > 0) {
+      parts.push(power);
+    }
+    const current = this.currentText();
+    if (current.length > 0) {
+      parts.push(current);
+    }
+    const remaining = this.remainingTimeText();
+    if (remaining.length > 0) {
+      parts.push(remaining);
+    }
+    if (parts.length === 0) {
+      return '充电中';
+    }
+    return `充电中 · ${parts.join(' · ')}`;
+  }
+
+  /**
+   * 会话中功能的状态文案。
+   *
+   * 露营模式与驻车空调本质是同一件事 —— 露营模式开着时空调必然在跑，
+   * 所以两者合并成一条，露营模式优先（它多了倒计时信息）。
+   * 空调与空气净化互斥，不会同时出现。
+   */
+  private sessionStatusText(): string {
+    if (this.campPhase === TogglePhase.ON) {
+      const remaining = this.campRemainingMinutes;
+      if (remaining > 0) {
+        return `露营模式已开启 · 剩余 ${this.campDurationText(remaining)}`;
+      }
+      return '露营模式已开启';
+    }
+    if (this.climatePhase === TogglePhase.ON) {
+      const remaining = this.climateRemainingMinutes;
+      if (remaining > 0) {
+        return `驻车空调运行中 · 剩余 ${this.campDurationText(remaining)}`;
+      }
+      return '驻车空调运行中';
+    }
+    if (this.airPhase === TogglePhase.ON) {
+      const parts: string[] = ['空气净化运行中'];
+      if (this.airRemainingMinutes > 0) {
+        parts.push(`剩余 ${this.campDurationText(this.airRemainingMinutes)}`);
+      }
+      if (this.airQualityIndex >= 0) {
+        parts.push(`AQI ${this.airQualityIndex}`);
+      }
+      return parts.join(' · ');
+    }
+    return '';
+  }
+
+  /**
+   * 分钟数转成「X 小时 Y 分」文案。
+   */
+  private campDurationText(minutes: number): string {
+    const h = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    if (h === 0) {
+      return `${m} 分钟`;
+    }
+    return m === 0 ? `${h} 小时` : `${h} 小时 ${m} 分`;
+  }
+
+  /**
+   * 健康告警文案。
+   *
+   * 只显示第一条 + 其余项计数 —— 平铺会让这一行变成一堵墙，
+   * 用户反而看不出重点。告警列表已按安全性排序，第一条即最需要处理的。
+   */
+  private healthWarningText(): string {
+    if (this.healthWarnings.length === 0) {
+      return '';
+    }
+    const first = this.healthWarnings[0];
+    const rest = this.healthWarnings.length - 1;
+    if (rest <= 0) {
+      return first;
+    }
+    return `${first} · 另有 ${rest} 项异常`;
+  }
+
+  /**
+   * 状态行的颜色。
+   */
+  private statusLineColor(): ResourceColor {
+    const level = this.statusLevel();
+    if (level === 3) {
+      return $r('app.color.app_warn');
+    }
+    if (level === 2) {
+      return $r('app.color.app_error');
+    }
+    if (level === 1) {
+      return $r('app.color.app_accent_text');
+    }
+    return $r('app.color.app_tertiary_text');
   }
 
   /**
@@ -2961,15 +3140,24 @@ struct Index {
             .justifyContent(FlexAlign.Center)
             .margin({ top: 16 })
 
-            // ---------- 车型信息 ----------
+            // ---------- 车型信息 / 状态行 ----------
+            // 有重要信息时，车型名与副文本整体让位给状态行 ——
+            // 静态信息在异常或充电时是干扰，状态行才是用户此刻要看的。
             Column({ space: 2 }) {
-              Text(this.modelName)
-                .fontSize(16)
-                .fontWeight(FontWeight.Medium)
-                .fontColor($r('app.color.app_primary_text'))
-              Text(this.modelSubtitle())
-                .fontSize(10)
-                .fontColor($r('app.color.app_tertiary_text'))
+              if (this.statusLineText().length === 0) {
+                Text(this.modelName)
+                  .fontSize(16)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor($r('app.color.app_primary_text'))
+                Text(this.modelSubtitle())
+                  .fontSize(10)
+                  .fontColor($r('app.color.app_tertiary_text'))
+              } else {
+                Text(this.statusLineText())
+                  .fontSize(13)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(this.statusLineColor())
+              }
             }
             .width('100%')
             .alignItems(HorizontalAlign.Center)

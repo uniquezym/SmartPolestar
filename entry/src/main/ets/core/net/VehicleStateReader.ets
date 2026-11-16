@@ -257,7 +257,96 @@ export class VehicleStateReader {
       }
     }
     state.healthStatus = hasWarning ? '需关注' : (hasAny ? '未知' : '良好');
+    state.healthWarnings = VehicleStateReader.parseHealthWarnings(fields, state);
     state.healthStateAt = Date.now();
+  }
+
+  /**
+   * 解析逐项健康告警。
+   *
+   * 协议里每种告警都是独立字段，枚举取值含义各不相同，
+   * 因此按项判定而不是套用统一的「> 1 即报」：
+   *
+   *   胎压 TyrePressureWarning   1=无告警 2=很低 3=低 4=偏高
+   *   制动液 BrakeFluidLevel     1=无告警 2=偏低 3=严重偏低
+   *   冷却液 EngineCoolantLevel  1=无告警 2=偏低
+   *   机油 OilLevel              1=无告警 2=需要保养 3=偏低 4=偏高
+   *   玻璃水 WasherFluidLevel    1=无告警 2=偏低
+   *   12V 电压 LowVoltageBattery 1=无告警 2=偏低
+   *
+   * 注意胎压的 4 是「偏高」，不是正常 ——
+   * 漏报胎压偏高与漏报胎压过低同样危险，因此胎压三项全报。
+   *
+   * 排序按安全性：制动系统 → 轮胎 → 液体 → 电压 → 保养。
+   * 概览页的状态行只显示第一条 + 计数，排序即优先级。
+   *
+   * @param fields 健康响应字段
+   * @param state  已写入保养状态的状态对象（保养文案复用其中的枚举标签）
+   * @returns 可读的告警文案列表，无告警时为空数组
+   */
+  private static parseHealthWarnings(
+    fields: Map<number, number | Uint8Array>, state: VehicleState): string[] {
+    const warnings: string[] = [];
+
+    // 制动液：2=偏低，3=严重偏低
+    const brakeFluid = ProtoValue.asInteger(ProtoValue.get(fields, 6));
+    if (brakeFluid === 3) {
+      warnings.push('制动液液位严重偏低');
+    } else if (brakeFluid === 2) {
+      warnings.push('制动液液位偏低');
+    }
+
+    // 胎压：2=很低，3=低，4=偏高。四条轮分别判定。
+    const tyreNames: string[] = ['左前', '右前', '左后', '右后'];
+    for (let i = 0; i < 4; i++) {
+      const value = ProtoValue.asInteger(ProtoValue.get(fields, 9 + i));
+      const name = tyreNames[i];
+      if (value === 2) {
+        warnings.push(`${name}胎压过低`);
+      } else if (value === 3) {
+        warnings.push(`${name}胎压偏低`);
+      } else if (value === 4) {
+        warnings.push(`${name}胎压偏高`);
+      }
+    }
+
+    // 冷却液：2=偏低
+    const coolant = ProtoValue.asInteger(ProtoValue.get(fields, 7));
+    if (coolant === 2) {
+      warnings.push('冷却液液位偏低');
+    }
+
+    // 机油：2=需要保养，3=偏低，4=偏高
+    const oil = ProtoValue.asInteger(ProtoValue.get(fields, 8));
+    if (oil === 3) {
+      warnings.push('机油液位偏低');
+    } else if (oil === 4) {
+      warnings.push('机油液位偏高');
+    } else if (oil === 2) {
+      warnings.push('机油需要更换');
+    }
+
+    // 玻璃水：2=偏低
+    const washer = ProtoValue.asInteger(ProtoValue.get(fields, 13));
+    if (washer === 2) {
+      warnings.push('玻璃水液位偏低');
+    }
+
+    // 12V 蓄电池：2=电压偏低
+    const lowVoltage = ProtoValue.asInteger(ProtoValue.get(fields, 38));
+    if (lowVoltage === 2) {
+      warnings.push('12V 蓄电池电压偏低');
+    }
+
+    // 保养：复用已有的枚举标签。
+    // 「未提供」= 协议没给值，「正常」= 无告警，「未知」= 取值越界，都不算告警。
+    const maintenance = state.maintenanceStatus;
+    if (maintenance.length > 0 &&
+      maintenance !== '未提供' && maintenance !== '正常' && maintenance !== '未知') {
+      warnings.push(maintenance);
+    }
+
+    return warnings;
   }
 
   /**

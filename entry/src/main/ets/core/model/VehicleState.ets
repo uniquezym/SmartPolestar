@@ -83,6 +83,14 @@ export class VehicleState {
   // ---- 健康 ----
   healthStatus: string = '未知';
   healthDetails: string = '';
+  /**
+   * 逐项健康告警文案。
+   *
+   * 协议里每种告警都是独立字段（胎压 4 条、液位 3 条、12V 电压、保养状态……），
+   * 汇总成一句「需关注」看不出到底哪里有问题。
+   * 这里逐项解析成可读文案，概览页的状态行直接用它。
+   */
+  healthWarnings: string[] = [];
   maintenanceStatus: string = '未知';
   serviceRemainingHours: number | undefined = undefined;
   serviceRemainingDays: number | undefined = undefined;
