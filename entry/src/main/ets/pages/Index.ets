@@ -1047,6 +1047,12 @@ struct Index {
         this.climate = state.climate;
         this.climateRemainingMinutes = state.climateRuntimeMinutes ?? -1;
         this.applyStreamPhase(ToggleKind.CLIMATE, state.climate, '开启', '关闭');
+        // 露营模式是靠驻车空调支撑的。空调在车端被关掉（用户手动关、
+        // 或车端到时停机）后，露营模式的倒计时已经没有意义，
+        // 这里只清本地状态，不再下发关闭指令。
+        if (this.campPhase === TogglePhase.ON && state.climate === '关闭') {
+          this.stopCampMode();
+        }
         this.syncClimateTimer();
         this.publishCard();
         break;
@@ -1809,6 +1815,17 @@ struct Index {
   }
 
   /**
+   * 空调快捷键下方的补充提示。
+   *
+   * 露营模式是靠驻车空调支撑的 —— 露营模式开着时空调标签下面
+   * 额外标注「露营模式开」，让用户一眼看出这不是一次普通的空调开启，
+   * 而是带倒计时守护的驻车空调。
+   */
+  private climateHint(): string {
+    return this.campPhase === TogglePhase.ON ? '露营模式开' : '';
+  }
+
+  /**
    * 车控前置检查：会话就绪。
    */
   private controlPrerequisites(): boolean {
@@ -1907,9 +1924,13 @@ struct Index {
     // 关闭路径
     if (this.campPhase === TogglePhase.ON) {
       this.campPhase = TogglePhase.PENDING;
+      // 空调按钮同时进入执行中 —— 概览页的空调快捷键就是关闭露营模式的入口，
+      // 不给执行反馈会让人以为没点中。
+      this.climatePhase = TogglePhase.PENDING;
       const success = await this.executeAction(VehicleCommands.ACTION_CLIMATE_STOP);
       if (!success) {
         this.campPhase = TogglePhase.ON;
+        this.climatePhase = TogglePhase.ON;
         return;
       }
       await controller.stop();
@@ -1972,6 +1993,23 @@ struct Index {
     this.campPhase = TogglePhase.OFF;
     this.campRemainingMinutes = 0;
     this.campRemainingRatio = 0;
+  }
+
+  /**
+   * 概览页空调快捷键的点击处理。
+   *
+   * 露营模式开着时，空调快捷键直接用来「关闭露营模式」——
+   * 露营模式是靠驻车空调支撑的，把空调关掉就等于结束守护，
+   * 没有必要再让用户去控制页的露营卡片里关一次。
+   *
+   * 露营模式没开时，走普通的空调开关逻辑。
+   */
+  private onClimateShortcutTap(): void {
+    if (this.campPhase === TogglePhase.ON) {
+      this.toggleCamp();
+      return;
+    }
+    this.toggle(ToggleKind.CLIMATE);
   }
 
   /**
@@ -2895,8 +2933,9 @@ struct Index {
                   phase: this.climatePhase,
                   // 空调与空气净化互斥：对方开启或执行中时本项置灰
                   disabled: this.airActive(),
+                  hint: this.climateHint(),
                   onTap: (kind: ToggleKind) => {
-                    this.toggle(kind);
+                    this.onClimateShortcutTap();
                   }
                 })
                 StateToggle({
