@@ -169,8 +169,23 @@ export class VehicleStateReader {
     const fields = VehicleStateReader.unwrap(response, 3);
 
     state.air = VehicleState.enumLabel(ProtoValue.asInteger(ProtoValue.get(fields, 6)), AIR_LABELS);
-    state.airQualityIndex = ProtoValue.asInteger(ProtoValue.get(fields, 9));
-    state.pm25UgM3 = ProtoValue.asFiniteNumber(ProtoValue.get(fields, 10));
+
+    // AQI 与 PM2.5 是「测量值」，车端只在有新的测量结果时才带上这两个字段
+    // （协议里另有 field 8 = lastCycleValid 表示上一次测量是否有效）。
+    // 流式推送的后续帧常常只带运行状态与剩余时长，不带测量值。
+    //
+    // 因此这里只在字段**确实存在**时才覆盖，缺失就沿用上一次的值 ——
+    // 否则每来一帧不带测量的推送，已有的 AQI / PM2.5 就被清成未知，
+    // 用户会看到「空气质量信息凭空消失」。
+    const aqi = ProtoValue.asInteger(ProtoValue.get(fields, 9));
+    if (aqi !== undefined) {
+      state.airQualityIndex = aqi;
+    }
+    const pm25 = ProtoValue.asFiniteNumber(ProtoValue.get(fields, 10));
+    if (pm25 !== undefined) {
+      state.pm25UgM3 = pm25;
+    }
+
     // field 11 = 剩余运行分钟数。据此可推算预计结束时刻，
     // 状态检查安排在那一刻前后即可，不必固定周期轮询。
     state.airRuntimeMinutes = ProtoValue.asInteger(ProtoValue.get(fields, 11));

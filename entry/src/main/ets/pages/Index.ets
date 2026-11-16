@@ -619,8 +619,13 @@ struct Index {
           this.publishCard();
         }
         this.airRemainingMinutes = airState.airRuntimeMinutes ?? -1;
-        this.airQualityIndex = airState.airQualityIndex ?? -1;
-        this.pm25UgM3 = airState.pm25UgM3 ?? -1;
+        // 测量值缺失时沿用旧值，不清成未知
+        if (airState.airQualityIndex !== undefined) {
+          this.airQualityIndex = airState.airQualityIndex;
+        }
+        if (airState.pm25UgM3 !== undefined) {
+          this.pm25UgM3 = airState.pm25UgM3;
+        }
       }
 
       const now = Date.now();
@@ -1141,8 +1146,14 @@ struct Index {
         this.publishCard();
         break;
       case 'air':
-        this.airQualityIndex = state.airQualityIndex ?? -1;
-        this.pm25UgM3 = state.pm25UgM3 ?? -1;
+        // AQI / PM2.5 是测量值，车端可能某帧不带 —— 不带就沿用旧值，
+        // 不能清成未知，否则空气质量信息会凭空消失。
+        if (state.airQualityIndex !== undefined) {
+          this.airQualityIndex = state.airQualityIndex;
+        }
+        if (state.pm25UgM3 !== undefined) {
+          this.pm25UgM3 = state.pm25UgM3;
+        }
         this.airRemainingMinutes = state.airRuntimeMinutes ?? -1;
         this.applyStreamPhase(ToggleKind.PURIFIER, state.air, '开启', '关闭');
         this.syncClimateTimer();
@@ -1476,8 +1487,13 @@ struct Index {
     // 剩余时长用来推算预计结束时刻，把状态检查排在那之前。
     this.climateRemainingMinutes = state.climateRuntimeMinutes ?? -1;
     this.airRemainingMinutes = state.airRuntimeMinutes ?? -1;
-    this.airQualityIndex = state.airQualityIndex ?? -1;
-    this.pm25UgM3 = state.pm25UgM3 ?? -1;
+    // AQI / PM2.5 缺失时沿用旧值（快照路径也可能是残缺响应）
+    if (state.airQualityIndex !== undefined) {
+      this.airQualityIndex = state.airQualityIndex;
+    }
+    if (state.pm25UgM3 !== undefined) {
+      this.pm25UgM3 = state.pm25UgM3;
+    }
     this.syncClimateTimer();
 
     // 健康告警：状态行最高优先级。
@@ -2763,8 +2779,13 @@ struct Index {
     if (kind === ToggleKind.PURIFIER) {
       const state = await repository.readDomain('air', this.vin);
       this.airRemainingMinutes = state.airRuntimeMinutes ?? -1;
-      this.airQualityIndex = state.airQualityIndex ?? -1;
-      this.pm25UgM3 = state.pm25UgM3 ?? -1;
+      // 测量值缺失时沿用旧值，不清成未知
+      if (state.airQualityIndex !== undefined) {
+        this.airQualityIndex = state.airQualityIndex;
+      }
+      if (state.pm25UgM3 !== undefined) {
+        this.pm25UgM3 = state.pm25UgM3;
+      }
       if (state.air === '开启') {
         return TogglePhase.ON;
       }
@@ -3313,7 +3334,7 @@ struct Index {
             .width('100%')
             .padding({ top: 16, bottom: 15 })
             .border({ width: { top: 1, bottom: 1 }, color: $r('app.color.app_rule') })
-            .margin({ top: 16 })
+            .margin({ top: 10 })
 
             // ---------- 最后停车位置 ----------
             StateRow({
@@ -3326,7 +3347,7 @@ struct Index {
                 this.openParkedMap();
               }
             })
-            .margin({ top: 8, bottom: 10 })
+            .margin({ top: 6, bottom: 4 })
           }
           .width('100%')
           .padding({ left: 18, right: 18 })
