@@ -59,14 +59,6 @@ export struct StateToggle {
   @Prop @Watch('onPhaseChanged') phase: TogglePhase = TogglePhase.OFF;
   /** 是否禁用（互斥功能：另一项开启时置灰）。 */
   @Prop disabled: boolean = false;
-  /**
-   * 状态标签下方的补充提示。
-   *
-   * 用于「空调开 + 露营模式开」这类叠加语义 ——
-   * 露营模式是靠驻车空调支撑的，两者同时成立时只说「空调开」会让人
-   * 以为那只是一次普通的空调开启，看不出倒计时守护的存在。
-   */
-  @Prop hint: string = '';
   /** 点击回调，由父组件负责下发指令并回写 phase。 */
   onTap?: (kind: ToggleKind) => void;
 
@@ -223,14 +215,6 @@ export struct StateToggle {
           ? $r('app.color.app_tertiary_text')
           : $r('app.color.app_accent_text'))
         .opacity(this.disabled ? 0.45 : 1)
-
-      // 补充提示（非空时才占位，避免空白行）
-      if (this.hint.length > 0) {
-        Text(this.hint)
-          .fontSize(10)
-          .fontColor($r('app.color.app_accent_text'))
-          .opacity(this.disabled ? 0.45 : 1)
-      }
     }
     .alignItems(HorizontalAlign.Center)
     .onClick(() => {

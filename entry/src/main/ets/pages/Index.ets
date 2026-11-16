@@ -49,6 +49,16 @@ struct Index {
   private static readonly TEXT_TICK_INTERVAL_MS: number = 30000;
 
   /**
+   * 车模下方信息区的固定高度（vp）。
+   *
+   * 这一块有两种形态：两行静态信息（车型名 + 副文本）与一行状态行。
+   * 两者高度不同，按内容自适应的话，状态行出现 / 消失时整页会上下跳。
+   * 取两行形态的高度作为固定值（16fp 主标题 + 10fp 副标题 + 2vp 间距 ≈ 40vp，
+   * 留一点余量避免文字被裁），内容垂直居中，切换就看不出跳变。
+   */
+  private static readonly STATUS_AREA_HEIGHT: number = 42;
+
+  /**
    * 充电中轮询电池状态的周期（毫秒）。
    *
    * 只在「充电中 / 智能充电」时启用，且只读 battery 一个域，
@@ -191,6 +201,17 @@ struct Index {
   @State pm25UgM3: number = -1;
   /** 逐项健康告警文案，为空表示没有异常。 */
   @State healthWarnings: string[] = [];
+  /**
+   * 驻车空调剩余分钟数（本地倒计时）。
+   *
+   * 车端只在状态推送里给剩余时长，推送间隔不固定，状态行的倒计时
+   * 因此会「卡住」不往下走。这里按预计结束时刻本地推算，
+   * 每 30 秒刷新一次，不依赖车端推送频率。
+   * -1 表示不适用（没开或拿不到剩余时长）。
+   */
+  @State climateCountdownMinutes: number = -1;
+  /** 空气净化剩余分钟数（本地倒计时），语义同climateCountdownMinutes。 */
+  @State airCountdownMinutes: number = -1;
 
   /** 尾门解锁态 —— 车模尾门标记点显示警示色。 */
   @State trunkUnlocked: boolean = false;
@@ -324,6 +345,9 @@ struct Index {
     if (this.parkedTimestamp > 0) {
       this.parkedTime = this.formatParkedTime(this.parkedTimestamp);
     }
+    // 状态行的空调 / 净化倒计时也跟着这个心跳走 ——
+    // 车端推送间隔不固定，指望推送来递减会看到「倒计时卡住」。
+    this.tickCountdowns();
   }
 
   /**
@@ -461,6 +485,12 @@ struct Index {
   private syncClimateTimer(): void {
     const climateOn = this.climatePhase === TogglePhase.ON;
     const airOn = this.airPhase === TogglePhase.ON;
+
+    // 锚点与倒计时先更新 —— 即使不再安排状态检查，
+    // 状态行的倒计时也要跟着车端推送走。
+    this.syncCountdownAnchors();
+    this.tickCountdowns();
+
     if (!climateOn && !airOn) {
       this.stopClimateTimer();
       return;
@@ -473,21 +503,7 @@ struct Index {
       return;
     }
 
-    // 预计结束时刻只在两种情况下重算：
-    //   1. 刚刚转为开启 —— 建立锚点
-    //   2. 剩余时长变长了 —— 用户在车端续了时
-    // 其余情况一律沿用旧锚点。若每轮都用「当前剩余」重算，
-    // 车端剩余值不递减时结束时刻会一直往后漂，永远等不到收尾。
     const now = Date.now();
-    this.climateExpectedEnd = Index.refreshExpectedEnd(
-      this.climateExpectedEnd, this.climateObservedRemaining,
-      this.climateRemainingMinutes, climateOn, now);
-    this.climateObservedRemaining = climateOn ? this.climateRemainingMinutes : -1;
-
-    this.airExpectedEnd = Index.refreshExpectedEnd(
-      this.airExpectedEnd, this.airObservedRemaining,
-      this.airRemainingMinutes, airOn, now);
-    this.airObservedRemaining = airOn ? this.airRemainingMinutes : -1;
 
     // 两项都在跑时取更早的那个结束时刻 —— 先结束的先查，避免漏掉。
     const deadline = Index.earliestDeadline(this.climateExpectedEnd, this.airExpectedEnd);
@@ -631,6 +647,71 @@ struct Index {
       // 状态可能已变为关闭，据此重排下一次检查
       this.syncClimateTimer();
     }
+  }
+
+  /**
+   * 更新空调 / 净化的预计结束时刻锚点。
+   *
+   * 锚点只在两种情况下重算：
+   *   1. 刚刚转为开启 —— 建立锚点
+   *   2. 剩余时长变长了 —— 用户在车端续了时
+   * 其余情况一律沿用旧锚点。若每轮都用「当前剩余」重算，
+   * 车端剩余值不递减时结束时刻会一直往后漂，永远等不到收尾。
+   */
+  private syncCountdownAnchors(): void {
+    const now = Date.now();
+    const climateOn = this.climatePhase === TogglePhase.ON;
+    const airOn = this.airPhase === TogglePhase.ON;
+
+    this.climateExpectedEnd = Index.refreshExpectedEnd(
+      this.climateExpectedEnd, this.climateObservedRemaining,
+      this.climateRemainingMinutes, climateOn, now);
+    this.climateObservedRemaining = climateOn ? this.climateRemainingMinutes : -1;
+
+    this.airExpectedEnd = Index.refreshExpectedEnd(
+      this.airExpectedEnd, this.airObservedRemaining,
+      this.airRemainingMinutes, airOn, now);
+    this.airObservedRemaining = airOn ? this.airRemainingMinutes : -1;
+  }
+
+  /**
+   * 按预计结束时刻本地推算剩余分钟数。
+   *
+   * 车端只在状态推送里给剩余时长，推送间隔不固定（有时几分钟才一帧），
+   * 直接显示车端值会出现「倒计时卡住不动」。
+   * 这里按锚点实时推算，30 秒刷新一次。
+   *
+   * 推不出锚点（车端没给剩余时长）时回落到车端值。
+   */
+  private tickCountdowns(): void {
+    const now = Date.now();
+    this.climateCountdownMinutes = this.countdownOf(
+      this.climateExpectedEnd, this.climateRemainingMinutes,
+      this.climatePhase === TogglePhase.ON, now);
+    this.airCountdownMinutes = this.countdownOf(
+      this.airExpectedEnd, this.airRemainingMinutes,
+      this.airPhase === TogglePhase.ON, now);
+  }
+
+  /**
+   * 计算一项的剩余分钟数。
+   *
+   * @param expectedEnd 预计结束时刻（epoch millis），0 表示未知
+   * @param fallback   车端给的剩余分钟数，-1 表示未知
+   * @param running   当前是否在运行
+   * @param now       当前时刻
+   * @returns 剩余分钟数，-1 表示拿不到
+   */
+  private countdownOf(expectedEnd: number, fallback: number,
+    running: boolean, now: number): number {
+    if (!running) {
+      return -1;
+    }
+    if (expectedEnd > 0) {
+      const left = expectedEnd - now;
+      return left <= 0 ? 0 : Math.ceil(left / 60000);
+    }
+    return fallback;
   }
 
   /**
@@ -1731,7 +1812,7 @@ struct Index {
       return '露营模式已开启';
     }
     if (this.climatePhase === TogglePhase.ON) {
-      const remaining = this.climateRemainingMinutes;
+      const remaining = this.climateCountdownMinutes;
       if (remaining > 0) {
         return `驻车空调运行中 · 剩余 ${this.campDurationText(remaining)}`;
       }
@@ -1739,11 +1820,15 @@ struct Index {
     }
     if (this.airPhase === TogglePhase.ON) {
       const parts: string[] = ['空气净化运行中'];
-      if (this.airRemainingMinutes > 0) {
-        parts.push(`剩余 ${this.campDurationText(this.airRemainingMinutes)}`);
+      const remaining = this.airCountdownMinutes;
+      if (remaining > 0) {
+        parts.push(`剩余 ${this.campDurationText(remaining)}`);
       }
       if (this.airQualityIndex >= 0) {
         parts.push(`AQI ${this.airQualityIndex}`);
+      }
+      if (this.pm25UgM3 >= 0) {
+        parts.push(`PM2.5 ${this.pm25UgM3.toFixed(1)} μg/m³`);
       }
       return parts.join(' · ');
     }
@@ -1991,17 +2076,6 @@ struct Index {
    */
   private airActive(): boolean {
     return this.airPhase !== TogglePhase.OFF;
-  }
-
-  /**
-   * 空调快捷键下方的补充提示。
-   *
-   * 露营模式是靠驻车空调支撑的 —— 露营模式开着时空调标签下面
-   * 额外标注「露营模式开」，让用户一眼看出这不是一次普通的空调开启，
-   * 而是带倒计时守护的驻车空调。
-   */
-  private climateHint(): string {
-    return this.campPhase === TogglePhase.ON ? '露营模式开' : '';
   }
 
   /**
@@ -3112,7 +3186,6 @@ struct Index {
                   phase: this.climatePhase,
                   // 空调与空气净化互斥：对方开启或执行中时本项置灰
                   disabled: this.airActive(),
-                  hint: this.climateHint(),
                   onTap: (kind: ToggleKind) => {
                     this.onClimateShortcutTap();
                   }
@@ -3143,23 +3216,37 @@ struct Index {
             // ---------- 车型信息 / 状态行 ----------
             // 有重要信息时，车型名与副文本整体让位给状态行 ——
             // 静态信息在异常或充电时是干扰，状态行才是用户此刻要看的。
-            Column({ space: 2 }) {
+            //
+            // 容器高度固定：两行文字与一行状态行的高度不同，
+            // 若按内容自适应，切换时整页会上下跳一下。
+            // 固定高度 + 内容垂直居中，切换就看不出来了。
+            Column() {
               if (this.statusLineText().length === 0) {
-                Text(this.modelName)
-                  .fontSize(16)
-                  .fontWeight(FontWeight.Medium)
-                  .fontColor($r('app.color.app_primary_text'))
-                Text(this.modelSubtitle())
-                  .fontSize(10)
-                  .fontColor($r('app.color.app_tertiary_text'))
+                Column({ space: 2 }) {
+                  Text(this.modelName)
+                    .fontSize(16)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor($r('app.color.app_primary_text'))
+                  Text(this.modelSubtitle())
+                    .fontSize(10)
+                    .fontColor($r('app.color.app_tertiary_text'))
+                }
+                .width('100%')
+                .alignItems(HorizontalAlign.Center)
               } else {
                 Text(this.statusLineText())
                   .fontSize(13)
                   .fontWeight(FontWeight.Medium)
                   .fontColor(this.statusLineColor())
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  .width('100%')
+                  .textAlign(TextAlign.Center)
               }
             }
             .width('100%')
+            .height(Index.STATUS_AREA_HEIGHT)
+            .justifyContent(FlexAlign.Center)
             .alignItems(HorizontalAlign.Center)
             .margin({ top: 16 })
 
