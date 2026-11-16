@@ -341,6 +341,15 @@ struct Index {
   private pendingConfirmKind: ToggleKind | undefined = undefined;
   /** 等待确认的目标状态。 */
   private pendingConfirmTarget: TogglePhase = TogglePhase.OFF;
+  /**
+   * 需要静默确认的开关。
+   *
+   * 露营模式关闭时，空调是「实现手段」而不是用户直接操作的对象 ——
+   * 用户关的是露营模式，提示也该是「露营模式已关闭」，
+   * 不该再弹一条「驻车空调已关闭」。此时把空调标记为静默，
+   * 推送确认时就不再弹提示。
+   */
+  private silentConfirmKind: ToggleKind | undefined = undefined;
 
   aboutToAppear(): void {
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -700,11 +709,14 @@ struct Index {
    *   2. 剩余时长变长了 —— 用户在车端续了时
    * 其余情况一律沿用旧锚点。若每轮都用「当前剩余」重算，
    * 车端剩余值不递减时结束时刻会一直往后漂，永远等不到收尾。
+   *
+   * 「正在关闭」也算运行中 —— 空调还在跑，锚点不能丢，
+   * 否则关闭过程中状态行的倒计时会突然变成「拿不到」。
    */
   private syncCountdownAnchors(): void {
     const now = Date.now();
-    const climateOn = this.climatePhase === TogglePhase.ON;
-    const airOn = this.airPhase === TogglePhase.ON;
+    const climateOn = this.climateRunning();
+    const airOn = this.airRunning();
 
     this.climateExpectedEnd = Index.refreshExpectedEnd(
       this.climateExpectedEnd, this.climateObservedRemaining,
@@ -730,10 +742,10 @@ struct Index {
     const now = Date.now();
     this.climateCountdownMinutes = this.countdownOf(
       this.climateExpectedEnd, this.climateRemainingMinutes,
-      this.climatePhase === TogglePhase.ON, now);
+      this.climateRunning(), now);
     this.airCountdownMinutes = this.countdownOf(
       this.airExpectedEnd, this.airRemainingMinutes,
-      this.airPhase === TogglePhase.ON, now);
+      this.airRunning(), now);
   }
 
   /**
@@ -1297,7 +1309,11 @@ struct Index {
       if (reached) {
         this.pendingConfirmKind = undefined;
         this.settleToggle(kind, this.pendingConfirmTarget);
-        this.toast(`${this.toggleLabel(kind)}已${this.pendingConfirmTarget === TogglePhase.ON ? '开启' : '关闭'}`);
+        // 静默确认（露营模式关闭时关闭空调）不弹提示，
+        // 由调用方给「露营模式已关闭」。
+        if (this.silentConfirmKind !== kind) {
+          this.toast(`${this.toggleLabel(kind)}已${this.pendingConfirmTarget === TogglePhase.ON ? '开启' : '关闭'}`);
+        }
       }
       return;
     }
@@ -1812,15 +1828,13 @@ struct Index {
    * 所以两者合并成一条，露营模式优先（它多了倒计时信息）。
    * 空调与空气净化互斥，不会同时出现。
    *
-   * 关闭过程中（closing 标记为 true）保留原有文案，
-   * 只是把措辞改成「正在关闭」——
-   * 状态行在指令执行完之前不能消失，否则用户会以为已经关掉了。
+   * 关闭过程中文案保持不变 —— 空调 / 净化实际还在跑，
+   * 倒计时也还在走。换成「正在关闭…」反而多了一条要读的信息，
+   * 而且车端确认之后这一行整体消失，观感上不如一直显示原内容自然。
+   * 关闭完成后这一行回落车型名与副文本。
    */
   private sessionSegments(): StatusSegment[] {
-    if (this.campPhase === TogglePhase.ON || this.campClosing) {
-      if (this.campClosing) {
-        return [{ text: '露营模式正在关闭…', kind: 'label' }];
-      }
+    if (this.campRunning()) {
       const parts: StatusSegment[] = [{ text: '露营模式已开启', kind: 'label' }];
       const remaining = this.campRemainingMinutes;
       if (remaining > 0) {
@@ -1829,10 +1843,7 @@ struct Index {
       }
       return this.joinSegments(parts);
     }
-    if (this.climatePhase === TogglePhase.ON || this.climateClosing) {
-      if (this.climateClosing) {
-        return [{ text: '驻车空调正在关闭…', kind: 'label' }];
-      }
+    if (this.climateRunning()) {
       const parts: StatusSegment[] = [{ text: '驻车空调运行中', kind: 'label' }];
       const remaining = this.climateCountdownMinutes;
       if (remaining > 0) {
@@ -1841,10 +1852,7 @@ struct Index {
       }
       return this.joinSegments(parts);
     }
-    if (this.airPhase === TogglePhase.ON || this.airClosing) {
-      if (this.airClosing) {
-        return [{ text: '空气净化正在关闭…', kind: 'label' }];
-      }
+    if (this.airRunning()) {
       const parts: StatusSegment[] = [{ text: '空气净化运行中', kind: 'label' }];
       const remaining = this.airCountdownMinutes;
       if (remaining > 0) {
@@ -1862,6 +1870,30 @@ struct Index {
       return this.joinSegments(parts);
     }
     return [];
+  }
+
+  /**
+   * 露营模式是否处于「运行中（含正在关闭）」。
+   *
+   * 关闭过程中露营模式依然成立 —— 空调还在跑，倒计时还在走，
+   * 状态行要保持显示原内容，直到车端确认关闭。
+   */
+  private campRunning(): boolean {
+    return this.campPhase === TogglePhase.ON || this.campClosing;
+  }
+
+  /**
+   * 驻车空调是否处于「运行中（含正在关闭）」。
+   */
+  private climateRunning(): boolean {
+    return this.climatePhase === TogglePhase.ON || this.climateClosing;
+  }
+
+  /**
+   * 空气净化是否处于「运行中（含正在关闭）」。
+   */
+  private airRunning(): boolean {
+    return this.airPhase === TogglePhase.ON || this.airClosing;
   }
 
   /**
@@ -2217,18 +2249,34 @@ struct Index {
       // 空调按钮同时进入执行中 —— 概览页的空调快捷键就是关闭露营模式的入口，
       // 不给执行反馈会让人以为没点中。
       this.climatePhase = TogglePhase.PENDING;
-      // 状态行在指令确认前保留 —— 相位已经是 PENDING，
+      // 状态行在指令确认前保持原内容 —— 相位已经是 PENDING，
       // 若不看这个标记，「露营模式已开启 · 剩余 X」会立刻消失。
       this.campClosing = true;
       this.climateClosing = true;
+      // **先挂起推送确认，再下发指令**。
+      //
+      // 车端的「已关闭」推送完全可能早于指令调用返回，
+      // 若等到指令返回后才挂起确认，推送就落在等待窗口之外被丢掉，
+      // 白等满 12 秒预算才落定 —— 状态行会一直挂着不走。
+      this.pendingConfirmKind = ToggleKind.CLIMATE;
+      this.pendingConfirmTarget = TogglePhase.OFF;
+      // 推送确认时不弹「驻车空调已关闭」—— 这条路径自己给「露营模式已关闭」。
+      this.silentConfirmKind = ToggleKind.CLIMATE;
       const success = await this.executeAction(VehicleCommands.ACTION_CLIMATE_STOP);
       if (!success) {
+        this.pendingConfirmKind = undefined;
+        this.silentConfirmKind = undefined;
         this.campPhase = TogglePhase.ON;
         this.climatePhase = TogglePhase.ON;
         this.campClosing = false;
         this.climateClosing = false;
         return;
       }
+      // 等车端确认空调真的停了再收尾 —— 指令发出不代表空调已经停了。
+      // 状态行保持「露营模式已开启 · 剩余 X」直到这一刻，
+      // 确认之后才整体回落车型名与副文本。
+      await this.confirmToggle(ToggleKind.CLIMATE, TogglePhase.OFF, true);
+      this.silentConfirmKind = undefined;
       await controller.stop();
       this.campPhase = TogglePhase.OFF;
       this.campRemainingMinutes = 0;
@@ -2616,19 +2664,27 @@ struct Index {
    * 超过预算（12 秒）仍未确认，则按目标状态落定：指令确实已下发成功，
    * 只是车端还没推进到终态，不应把 UI 弹回原状态。
    */
-  private async confirmToggle(kind: ToggleKind, target: TogglePhase): Promise<void> {
+  private async confirmToggle(kind: ToggleKind, target: TogglePhase,
+    silent: boolean = false): Promise<void> {
     const budgetMs: number = 12000;
+
+    // 已经落定了就别再等 —— 推送可能早于指令调用返回就已经确认过，
+    // 这时再挂起等待会白等满 12 秒预算。
+    if (this.phaseOf(kind) === target) {
+      this.pendingConfirmKind = undefined;
+      return;
+    }
 
     // 流式可用时挂起等待，由推送来确认
     if (this.streamReadyFor(kind)) {
       this.pendingConfirmKind = kind;
       this.pendingConfirmTarget = target;
-      await this.waitStreamConfirm(kind, target, budgetMs);
+      await this.waitStreamConfirm(kind, target, budgetMs, silent);
       this.pendingConfirmKind = undefined;
       return;
     }
 
-    await this.confirmToggleByPolling(kind, target, budgetMs);
+    await this.confirmToggleByPolling(kind, target, budgetMs, silent);
     this.pendingConfirmKind = undefined;
   }
 
@@ -2659,9 +2715,10 @@ struct Index {
    * @param kind     开关语义类型
    * @param target   目标状态
    * @param budgetMs 最长等待时长
+   * @param silent   为 true 时不弹提示（调用方自己给反馈）
    */
   private async waitStreamConfirm(kind: ToggleKind, target: TogglePhase,
-    budgetMs: number): Promise<void> {
+    budgetMs: number, silent: boolean = false): Promise<void> {
     const startedAt: number = Date.now();
     while (Date.now() - startedAt < budgetMs) {
       if (this.pendingConfirmKind !== kind) {
@@ -2674,7 +2731,7 @@ struct Index {
         this.pendingConfirmKind = undefined;
         // 只把剩余预算交给轮询，否则总等待时间会翻倍
         const remaining = budgetMs - (Date.now() - startedAt);
-        await this.confirmToggleByPolling(kind, target, Math.max(remaining, 1000));
+        await this.confirmToggleByPolling(kind, target, Math.max(remaining, 1000), silent);
         return;
       }
       await this.delay(200);
@@ -2683,7 +2740,9 @@ struct Index {
     Log.warn(`车控状态未在 ${budgetMs}ms 内被推送确认，按下发结果落定`);
     this.pendingConfirmKind = undefined;
     this.settleToggle(kind, target);
-    this.toast(`${this.toggleLabel(kind)}指令已发送`);
+    if (!silent) {
+      this.toast(`${this.toggleLabel(kind)}指令已发送`);
+    }
   }
 
   /**
@@ -2695,9 +2754,10 @@ struct Index {
    * @param kind     开关语义类型
    * @param target   目标状态
    * @param budgetMs 剩余预算
+   * @param silent   为 true 时不弹提示（调用方自己给反馈）
    */
   private async confirmToggleByPolling(kind: ToggleKind, target: TogglePhase,
-    budgetMs: number): Promise<void> {
+    budgetMs: number, silent: boolean = false): Promise<void> {
     const startedAt: number = Date.now();
     let interval: number = 300;
     while (Date.now() - startedAt < budgetMs) {
@@ -2709,14 +2769,18 @@ struct Index {
           continue;
         }
         this.settleToggle(kind, target);
-        this.toast(`${this.toggleLabel(kind)}已${target === TogglePhase.ON ? '开启' : '关闭'}`);
+        if (!silent) {
+          this.toast(`${this.toggleLabel(kind)}已${target === TogglePhase.ON ? '开启' : '关闭'}`);
+        }
         return;
       } catch (err) {
         Log.warn(`确认车控状态失败: ${(err as Error).message}`);
       }
     }
     this.settleToggle(kind, target);
-    this.toast(`${this.toggleLabel(kind)}指令已发送`);
+    if (!silent) {
+      this.toast(`${this.toggleLabel(kind)}指令已发送`);
+    }
   }
 
   /**
