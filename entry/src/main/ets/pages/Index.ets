@@ -20,6 +20,27 @@ import { StateDomain } from '../core/vehicle/VehicleStateStream';
 import { BusinessError, Log } from '../common/Log';
 
 /**
+ * 状态行的片段类型，决定该片段的排版层级。
+ *
+ * 状态行原本是一整条同色同号的文本，用户必须逐字读才知道哪段是
+ * 「什么状态」、哪段是「具体数据」。拆成片段后按层级分别排版：
+ *
+ *   label —— 状态词。13fp Medium，唯一用主题蓝的片段，一眼扫到。
+ *   data  —— 辅助数据（功率、电流、AQI 等）。11fp 三级灰，退到背景。
+ *   key   —— 关键数值（剩余时长等）。13fp 等宽主色，与顶部总里程同一套语言。
+ *   sep   —— 分隔符。11fp 三级灰，弱化不抢视线。
+ */
+type StatusSegKind = 'label' | 'data' | 'key' | 'sep';
+
+/**
+ * 状态行的一个片段。
+ */
+interface StatusSegment {
+  text: string;
+  kind: StatusSegKind;
+}
+
+/**
  * 车辆状态总览页。
  *
  * 设计语言：Nordic Instrument —— 暖纸白底、发丝线分隔、表格数字、
@@ -1652,14 +1673,14 @@ struct Index {
       return '';
     }
     if (this.remainingMinutes < 60) {
-      return `约 ${this.remainingMinutes} 分钟`;
+      return `${this.remainingMinutes} 分钟`;
     }
     const h = Math.floor(this.remainingMinutes / 60);
     const m = this.remainingMinutes % 60;
     if (m === 0) {
-      return `约 ${h} 小时`;
+      return `${h} 小时`;
     }
-    return `约 ${h} 小时 ${m} 分`;
+    return `${h} 小时 ${m} 分`;
   }
 
   /**
@@ -1697,74 +1718,95 @@ struct Index {
     if (stage !== ChargeStage.IDLE && stage !== ChargeStage.DISCHARGING) {
       return 1;
     }
-    if (this.sessionStatusText().length > 0) {
+    if (this.sessionSegments().length > 0) {
       return 1;
     }
     return 0;
   }
 
   /**
-   * 状态行文案。
+   * 状态行片段。
    *
-   * 空串表示没有需要显示的状态 —— 此时回落到车型副文本。
+   * 空数组表示没有需要显示的状态 —— 此时回落到车型副文本。
    */
-  private statusLineText(): string {
+  private statusSegments(): StatusSegment[] {
     const level = this.statusLevel();
     if (level === 3) {
-      return this.healthWarningText();
+      return this.healthSegments();
     }
     if (level === 2) {
-      return this.chargerConnection === '连接故障' ? '充电连接故障' : '充电错误';
+      return [{
+        text: this.chargerConnection === '连接故障' ? '充电连接故障' : '充电错误',
+        kind: 'label'
+      }];
     }
     if (level === 1) {
       const stage = this.chargeStage();
       if (stage !== ChargeStage.IDLE && stage !== ChargeStage.DISCHARGING) {
-        return this.chargeStatusText();
+        return this.chargeSegments();
       }
-      return this.sessionStatusText();
+      return this.sessionSegments();
     }
-    return '';
+    return [];
   }
 
   /**
-   * 充电状态文案。
+   * 拼接片段，中间插入分隔符。
+   *
+   * 分隔符本身也是一个片段（kind = sep），这样它能跟其它片段一样
+   * 被 Row 依次渲染，不必在布局里做特殊判断。
+   */
+  private joinSegments(parts: StatusSegment[]): StatusSegment[] {
+    const result: StatusSegment[] = [];
+    for (const part of parts) {
+      if (part.text.length === 0) {
+        continue;
+      }
+      if (result.length > 0) {
+        result.push({ text: '·', kind: 'sep' });
+      }
+      result.push(part);
+    }
+    return result;
+  }
+
+  /**
+   * 充电状态的片段。
    *
    * 充电中给完整的功率 / 电流 / 剩余时间，
    * 其余阶段给一句话概括。
    */
-  private chargeStatusText(): string {
+  private chargeSegments(): StatusSegment[] {
     const stage = this.chargeStage();
     if (stage === ChargeStage.COMPLETED) {
-      return '充电已完成';
+      return [{ text: '充电已完成', kind: 'label' }];
     }
     if (stage === ChargeStage.PAUSED) {
-      return '充电已暂停';
+      return [{ text: '充电已暂停', kind: 'label' }];
     }
     if (stage === ChargeStage.PLUGGED) {
-      return '充电枪已连接';
+      return [{ text: '充电枪已连接', kind: 'label' }];
     }
     // 充电中：功率 · 电流 · 充满剩余时间
-    const parts: string[] = [];
+    const parts: StatusSegment[] = [{ text: '充电中', kind: 'label' }];
     const power = this.powerText();
     if (power.length > 0) {
-      parts.push(power);
+      parts.push({ text: power, kind: 'data' });
     }
     const current = this.currentText();
     if (current.length > 0) {
-      parts.push(current);
+      parts.push({ text: current, kind: 'data' });
     }
     const remaining = this.remainingTimeText();
     if (remaining.length > 0) {
-      parts.push(remaining);
+      parts.push({ text: '剩余', kind: 'data' });
+      parts.push({ text: remaining, kind: 'key' });
     }
-    if (parts.length === 0) {
-      return '充电中';
-    }
-    return `充电中 · ${parts.join(' · ')}`;
+    return this.joinSegments(parts);
   }
 
   /**
-   * 会话中功能的状态文案。
+   * 会话中功能的状态片段。
    *
    * 露营模式与驻车空调本质是同一件事 —— 露营模式开着时空调必然在跑，
    * 所以两者合并成一条，露营模式优先（它多了倒计时信息）。
@@ -1774,45 +1816,52 @@ struct Index {
    * 只是把措辞改成「正在关闭」——
    * 状态行在指令执行完之前不能消失，否则用户会以为已经关掉了。
    */
-  private sessionStatusText(): string {
+  private sessionSegments(): StatusSegment[] {
     if (this.campPhase === TogglePhase.ON || this.campClosing) {
       if (this.campClosing) {
-        return '露营模式正在关闭…';
+        return [{ text: '露营模式正在关闭…', kind: 'label' }];
       }
+      const parts: StatusSegment[] = [{ text: '露营模式已开启', kind: 'label' }];
       const remaining = this.campRemainingMinutes;
       if (remaining > 0) {
-        return `露营模式已开启 · 剩余 ${this.campDurationText(remaining)}`;
+        parts.push({ text: '剩余', kind: 'data' });
+        parts.push({ text: this.campDurationText(remaining), kind: 'key' });
       }
-      return '露营模式已开启';
+      return this.joinSegments(parts);
     }
     if (this.climatePhase === TogglePhase.ON || this.climateClosing) {
       if (this.climateClosing) {
-        return '驻车空调正在关闭…';
+        return [{ text: '驻车空调正在关闭…', kind: 'label' }];
       }
+      const parts: StatusSegment[] = [{ text: '驻车空调运行中', kind: 'label' }];
       const remaining = this.climateCountdownMinutes;
       if (remaining > 0) {
-        return `驻车空调运行中 · 剩余 ${this.campDurationText(remaining)}`;
+        parts.push({ text: '剩余', kind: 'data' });
+        parts.push({ text: this.campDurationText(remaining), kind: 'key' });
       }
-      return '驻车空调运行中';
+      return this.joinSegments(parts);
     }
     if (this.airPhase === TogglePhase.ON || this.airClosing) {
       if (this.airClosing) {
-        return '空气净化正在关闭…';
+        return [{ text: '空气净化正在关闭…', kind: 'label' }];
       }
-      const parts: string[] = ['空气净化运行中'];
+      const parts: StatusSegment[] = [{ text: '空气净化运行中', kind: 'label' }];
       const remaining = this.airCountdownMinutes;
       if (remaining > 0) {
-        parts.push(`剩余 ${this.campDurationText(remaining)}`);
+        parts.push({ text: '剩余', kind: 'data' });
+        parts.push({ text: this.campDurationText(remaining), kind: 'key' });
       }
       if (this.airQualityIndex >= 0) {
-        parts.push(`AQI ${this.airQualityIndex}`);
+        parts.push({ text: 'AQI', kind: 'data' });
+        parts.push({ text: `${this.airQualityIndex}`, kind: 'key' });
       }
       if (this.pm25UgM3 >= 0) {
-        parts.push(`PM2.5 ${this.pm25UgM3.toFixed(1)} μg/m³`);
+        parts.push({ text: 'PM2.5', kind: 'data' });
+        parts.push({ text: this.pm25UgM3.toFixed(1), kind: 'key' });
       }
-      return parts.join(' · ');
+      return this.joinSegments(parts);
     }
-    return '';
+    return [];
   }
 
   /**
@@ -1828,27 +1877,28 @@ struct Index {
   }
 
   /**
-   * 健康告警文案。
+   * 健康告警的片段。
    *
    * 只显示第一条 + 其余项计数 —— 平铺会让这一行变成一堵墙，
    * 用户反而看不出重点。告警列表已按安全性排序，第一条即最需要处理的。
    */
-  private healthWarningText(): string {
+  private healthSegments(): StatusSegment[] {
     if (this.healthWarnings.length === 0) {
-      return '';
+      return [];
     }
     const first = this.healthWarnings[0];
     const rest = this.healthWarnings.length - 1;
-    if (rest <= 0) {
-      return first;
+    const parts: StatusSegment[] = [{ text: first, kind: 'label' }];
+    if (rest > 0) {
+      parts.push({ text: `另有 ${rest} 项异常`, kind: 'data' });
     }
-    return `${first} · 另有 ${rest} 项异常`;
+    return this.joinSegments(parts);
   }
 
   /**
-   * 状态行的颜色。
+   * 状态词的颜色。
    */
-  private statusLineColor(): ResourceColor {
+  private statusLabelColor(): ResourceColor {
     const level = this.statusLevel();
     if (level === 3) {
       return $r('app.color.app_warn');
@@ -1860,6 +1910,13 @@ struct Index {
       return $r('app.color.app_accent_text');
     }
     return $r('app.color.app_tertiary_text');
+  }
+
+  /**
+   * 是否需要显示异常前置图标。
+   */
+  private statusShowWarningIcon(): boolean {
+    return this.statusLevel() === 3;
   }
 
   /**
@@ -3057,6 +3114,50 @@ struct Index {
   }
 
   /**
+   * 渲染状态行的各个片段。
+   *
+   * 用 Text + Span 而不是 Row 拼多个 Text —— Span 是 Text 内的富文本片段，
+   * 排版与截断都交给 Text 自己处理（超长时按 maxLines + 省略号收尾），
+   * 用 Row 拼的话溢出时会从两侧被切掉。
+   *
+   * 每个片段按 kind 走不同的排版层级：
+   *   label —— 状态词。13fp Medium，主题蓝 / 警示色 / 错误色，一眼扫到。
+   *   data  —— 辅助数据。11fp 等宽三级灰，退到背景不抢注意力。
+   *   key   —— 关键数值。13fp 等宽主色，与顶部「总里程」同一套语言。
+   *   sep   —— 分隔符。11fp 三级灰，左右各留 5vp。
+   */
+  @Builder
+  StatusSegments() {
+    Text() {
+      ForEach(this.statusSegments(), (segment: StatusSegment) => {
+        Span(segment.text)
+          .fontSize(segment.kind === 'label' || segment.kind === 'key' ? 13 : 11)
+          .fontWeight(segment.kind === 'label' ? FontWeight.Medium : FontWeight.Normal)
+          .fontFamily(segment.kind === 'label' ? '' : 'HarmonyOS Sans Mono')
+          .fontColor(this.segmentColor(segment))
+          .margin(segment.kind === 'sep' ? { left: 5, right: 5 } : { left: 0, right: 0 })
+      })
+    }
+    .maxLines(1)
+    .textOverflow({ overflow: TextOverflow.Ellipsis })
+    .width('100%')
+    .textAlign(TextAlign.Center)
+  }
+
+  /**
+   * 片段颜色。
+   */
+  private segmentColor(segment: StatusSegment): ResourceColor {
+    if (segment.kind === 'label') {
+      return this.statusLabelColor();
+    }
+    if (segment.kind === 'key') {
+      return $r('app.color.app_primary_text');
+    }
+    return $r('app.color.app_tertiary_text');
+  }
+
+  /**
    * 分节标签：标题 + 尾部发丝线（Nordic Instrument 的分节方式）。
    */
   @Builder
@@ -3251,7 +3352,7 @@ struct Index {
             // 若按内容自适应，切换时整页会上下跳一下。
             // 固定高度 + 内容垂直居中，切换就看不出来了。
             Column() {
-              if (this.statusLineText().length === 0) {
+              if (this.statusSegments().length === 0) {
                 Column({ space: 2 }) {
                   Text(this.modelName)
                     .fontSize(16)
@@ -3264,14 +3365,23 @@ struct Index {
                 .width('100%')
                 .alignItems(HorizontalAlign.Center)
               } else {
-                Text(this.statusLineText())
-                  .fontSize(13)
-                  .fontWeight(FontWeight.Medium)
-                  .fontColor(this.statusLineColor())
-                  .maxLines(1)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis })
-                  .width('100%')
-                  .textAlign(TextAlign.Center)
+                // 异常态前置警示图标：不用底色胶囊，警示色文字 + 图标即可跳出来
+                if (this.statusShowWarningIcon()) {
+                  Row({ space: 5 }) {
+                    AppIcon({
+                      name: AppIconName.WARNING,
+                      iconSize: 14,
+                      color: $r('app.color.app_warn')
+                    })
+                    .width(14)
+                    .height(14)
+
+                    this.StatusSegments()
+                  }
+                  .alignItems(VerticalAlign.Center)
+                } else {
+                  this.StatusSegments()
+                }
               }
             }
             .width('100%')

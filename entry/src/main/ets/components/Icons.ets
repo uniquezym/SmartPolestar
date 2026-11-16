@@ -67,6 +67,8 @@ export enum AppIconName {
   CHARGE_PLUG = 'charge_plug',
   /** 闹钟（预约充电）。 */
   ALARM = 'alarm',
+  /** 警告三角（车辆异常）。 */
+  WARNING = 'warning',
   /** 概览（首页）。 */
   TAB_HOME = 'tab_home',
   /** 控制。 */
@@ -228,6 +230,11 @@ const SHAPES: Record<string, IconShape> = {
       'L11.2,13.6 L11.2,6.2 Z',
     strokeWidth: 0,
     filled: true
+  },
+  // 警告三角：车辆异常状态行的前置标识
+  [AppIconName.WARNING]: {
+    path: 'M12,2.6 L22.4,20.6 L1.6,20.6 Z M12,9.4 L12,14.6 M12,17.4 L12,17.5',
+    strokeWidth: 2
   },
   // 底部导航：概览
   [AppIconName.TAB_HOME]: {
