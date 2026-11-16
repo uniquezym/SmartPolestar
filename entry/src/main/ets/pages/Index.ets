@@ -1865,7 +1865,7 @@ struct Index {
       }
       if (this.pm25UgM3 >= 0) {
         parts.push({ text: 'PM2.5', kind: 'data' });
-        parts.push({ text: this.pm25UgM3.toFixed(1), kind: 'key' });
+        parts.push({ text: `${Math.round(this.pm25UgM3)}`, kind: 'key' });
       }
       return this.joinSegments(parts);
     }
