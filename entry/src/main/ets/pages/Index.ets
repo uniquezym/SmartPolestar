@@ -1144,6 +1144,48 @@ struct Index {
   }
 
   /**
+   * 退出登录。
+   *
+   * 二次确认 → 清 session → 断开连接 → 回登录页。
+   */
+  private logout(): void {
+    this.getUIContext().showAlertDialog({
+      title: '退出登录',
+      message: '退出后需要重新登录并再次授权车辆控制。',
+      primaryButton: {
+        value: '取消',
+        action: () => {
+        }
+      },
+      secondaryButton: {
+        value: '退出登录',
+        fontColor: $r('app.color.app_polar'),
+        action: () => {
+          this.doLogout();
+        }
+      }
+    });
+  }
+
+  /**
+   * 执行退出登录。
+   *
+   * 先停掉页面上的一切后台活动（定时器、状态流），再清 session，
+   * 最后回登录页。
+   */
+  private async doLogout(): Promise<void> {
+    this.stopTextTimer();
+    this.stopChargeTimer();
+    this.stopClimateTimer();
+    this.stopLocationTimer();
+    this.stopVehicleStream();
+    if (this.repository !== undefined) {
+      await this.repository.logout();
+    }
+    this.getUIContext().getRouter().replaceUrl({ url: 'pages/Login' });
+  }
+
+  /**
    * 收到一帧流式状态。
    *
    * RCP 的 IncomingDataCallback 不在 UI 线程，
@@ -3690,6 +3732,9 @@ struct Index {
           },
           onFindCarAction: (action: string) => {
             this.honkFlash(action);
+          },
+          onLogout: () => {
+            this.logout();
           }
         })
           .width('100%')

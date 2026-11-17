@@ -58,6 +58,8 @@ export struct Control {
   onWindowToggle?: () => void;
   /** 点击寻车按钮（action = honk / flash / honk-flash）。 */
   onFindCarAction?: (action: string) => void;
+  /** 点击退出登录。 */
+  onLogout?: () => void;
 
   build() {
     Scroll() {
@@ -141,6 +143,22 @@ export struct Control {
           }
         })
         .margin({ bottom: 11 })
+
+        // ---------- 退出登录 ----------
+        Button('退出登录', { type: ButtonType.Normal })
+          .width('100%')
+          .height(46)
+          .fontSize(14)
+          .fontColor($r('app.color.app_error'))
+          .backgroundColor($r('app.color.app_error_soft'))
+          .border({ width: 1, color: $r('app.color.app_error') })
+          .borderRadius(8)
+          .margin({ top: 4, bottom: 24 })
+          .onClick(() => {
+            if (this.onLogout !== undefined) {
+              this.onLogout();
+            }
+          })
       }
       .width('100%')
       .padding({ left: 18, right: 18 })
