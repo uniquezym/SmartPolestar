@@ -41,6 +41,21 @@ export class VehicleStateReader {
   }
 
   /**
+   * 解开 gRPC 响应的外层包装，并保留重复字段。
+   *
+   * 驻车空调的错误列表（field 4）是 repeated enum —— 用 decode() 只会拿到最后一项，
+   * 而我们要判断的是「有没有 REACHED_MAX_RUNTIME」，需要全部条目。
+   */
+  static unwrapAll(response: Uint8Array, outerField: number): Map<number, (number | Uint8Array)[]> {
+    const outer = new ProtoReader(response).decodeAll();
+    const inner = ProtoValue.first(outer, outerField);
+    if (inner instanceof Uint8Array) {
+      return new ProtoReader(inner).decodeAll();
+    }
+    return outer;
+  }
+
+  /**
    * 读取电池 / 充电状态。对应 ga0.m1403Q。
    */
   static async readBattery(client: GrpcClient, vin: string, state: VehicleState): Promise<void> {
@@ -139,18 +154,61 @@ export class VehicleStateReader {
    * 把驻车空调响应映射到状态对象。
    */
   static applyClimate(response: Uint8Array, state: VehicleState): void {
-    const fields = VehicleStateReader.unwrap(response, 3);
+    // 错误列表是 repeated 字段，必须保留全部条目 —— 用 unwrapAll 而不是 unwrap。
+    const fields = VehicleStateReader.unwrapAll(response, 3);
 
-    state.climate = VehicleState.enumLabel(ProtoValue.asInteger(ProtoValue.get(fields, 2)), CLIMATE_LABELS);
-    state.climateRuntimeMinutes = ProtoValue.asInteger(ProtoValue.get(fields, 3));
+    state.climate = VehicleState.enumLabel(
+      ProtoValue.asInteger(ProtoValue.first(fields, 2)), CLIMATE_LABELS);
+    state.climateRuntimeMinutes = ProtoValue.asInteger(ProtoValue.first(fields, 3));
     // field 6 是运行模式，不是循环模式。原版只用它选图标：
     // 1 → ic_climate_cool（雪花）、2 → ic_climate_heat（热气）、其余 → ic_climate_airflow（气流）。
     // 早期版本误映射为「内循环 / 外循环」，原版代码中不存在该语义，已更正。
     state.climateRunMode = VehicleState.enumLabel(
-      ProtoValue.asInteger(ProtoValue.get(fields, 6)), CLIMATE_RUN_MODE_LABELS);
-    state.climateTemperatureC = ProtoValue.asFiniteNumber(ProtoValue.get(fields, 7));
-    state.climateTargetTemperatureC = ProtoValue.asFiniteNumber(ProtoValue.get(fields, 8));
+      ProtoValue.asInteger(ProtoValue.first(fields, 6)), CLIMATE_RUN_MODE_LABELS);
+    state.climateTemperatureC = ProtoValue.asFiniteNumber(ProtoValue.first(fields, 7));
+    state.climateTargetTemperatureC = ProtoValue.asFiniteNumber(ProtoValue.first(fields, 8));
+
+    // field 15 = startReason（枚举），field 16 = endingAt（Timestamp，秒级）。
+    state.climateStartReason = ProtoValue.asInteger(ProtoValue.first(fields, 15)) ?? -1;
+    state.climateEndingAt = VehicleStateReader.readEndingAt(ProtoValue.first(fields, 16));
+
+    // field 4 = errors（repeated enum）。
+    const errorList = fields.get(4);
+    const errors: number[] = [];
+    if (errorList !== undefined) {
+      for (const item of errorList) {
+        const code = ProtoValue.asInteger(item);
+        if (code !== undefined) {
+          errors.push(code);
+        }
+      }
+    }
+    state.climateErrors = errors;
+
     state.climateStateAt = Date.now();
+  }
+
+  /**
+   * 解析空调的结束时刻。
+   *
+   * Timestamp 结构：field 1 = 秒（int64），field 2 = 纳秒（int32）。
+   * 与原版 m401n0 的处理一致：秒值小于 1e11 时按秒处理，直接当 epoch 秒用。
+   *
+   * @param value field 16 的原始字节
+   * @returns 结束时刻（epoch millis），解析不出时返回 0
+   */
+  private static readEndingAt(value: number | Uint8Array | undefined): number {
+    if (!(value instanceof Uint8Array)) {
+      return 0;
+    }
+    const inner = new ProtoReader(value).decode();
+    const seconds = ProtoValue.asInteger(ProtoValue.get(inner, 1));
+    if (seconds === undefined || seconds <= 0) {
+      return 0;
+    }
+    // 车端给的是 epoch 秒；小于 1e11 的值按「相对时间」处理（与原版一致）。
+    const millis = seconds < 100000000000 ? seconds * 1000 : seconds;
+    return millis;
   }
 
   /**

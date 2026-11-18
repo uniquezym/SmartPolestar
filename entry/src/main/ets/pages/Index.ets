@@ -224,6 +224,17 @@ struct Index {
    */
   private static readonly CAMP_CLIMATE_SETTLE_MS: number = 15000;
 
+  /**
+   * 车端的「已到最大运行时长」错误码。
+   *
+   * ParkingClimatization.ErrorType.REACHED_MAX_RUNTIME = 8。
+   *
+   * 驻车空调撞到车端单次 30 分钟上限时会带上这个错误。
+   * 这是唯一「该续开」的错误 —— 其他错误（电量低、燃油低、暂时不可用）
+   * 续开只会反复失败，而且电量低时开空调本身就不该做。
+   */
+  private static readonly CLIMATE_ERROR_MAX_RUNTIME: number = 8;
+
   /** 正在拉取车辆状态。顶栏右上角显示刷新动效。 */
   @State loading: boolean = false;
   /** 下拉刷新指示器状态。 */
@@ -375,6 +386,31 @@ struct Index {
   private climatePolling: boolean = false;
   /** 空调剩余运行分钟数，用于推算预计结束时刻。 */
   private climateRemainingMinutes: number = -1;
+  /**
+   * 车端给出的空调结束时刻（epoch millis），0 表示未知。
+   *
+   * 比「现在 + 剩余分钟数」准 —— 秒级精度，没有取整误差。
+   * 露营守候窗口用它来算窗口开启时刻。
+   */
+  private climateEndingAt: number = 0;
+  /**
+   * 车端报告的空调错误码列表。
+   *
+   * 8 = REACHED_MAX_RUNTIME（撞到单次运行时长上限）。
+   * 续开前要看这个 —— 只有这个错误才该续开，
+   * 电量不足 / 故障导致的停机续开只会一直失败。
+   */
+  private climateErrors: number[] = [];
+  /**
+   * 车端报告的空调启动原因。
+   *
+   * ParkingClimatization field 15：
+   * 0=未指定 1=车内手动 2=远程 3=定时 4=保持空调。
+   *
+   * 「保持空调」（KEEP_CLIMATE）值得留意 —— 车端自己有「续着跑」的概念。
+   * 但它的触发条件未知，需要真机观察，不能据此改行为。
+   */
+  private climateStartReason: number = -1;
   /** 净化剩余运行分钟数，用于推算预计结束时刻。 */
   private airRemainingMinutes: number = -1;
   /** 上一次推算预计结束时刻时用到的空调剩余分钟数。 */
@@ -832,6 +868,12 @@ struct Index {
       // 万一车端同时报两项在跑，也各自读一次，不能漏掉。
       if (this.climatePhase === TogglePhase.ON) {
         const climateState = await this.repository.readDomain('climate', this.vin);
+        // 状态字段先落定 —— 下面判断「要不要续开」时要用错误码，顺序不能反。
+        this.climateRemainingMinutes = climateState.climateRuntimeMinutes ?? -1;
+        this.climateEndingAt = climateState.climateEndingAt;
+        this.climateErrors = climateState.climateErrors.slice();
+        this.climateStartReason = climateState.climateStartReason;
+        this.climate = climateState.climate;
         if (climateState.climate === '开启') {
           this.climatePhase = TogglePhase.ON;
         } else if (climateState.climate === '关闭') {
@@ -842,10 +884,9 @@ struct Index {
             this.scheduleCampClimateRestart('轮询发现空调已停');
           }
         }
-        this.climateRemainingMinutes = climateState.climateRuntimeMinutes ?? -1;
-        this.climate = climateState.climate;
         // 轮询拿到的剩余时长同样会改变停机时刻 —— 守候窗口跟着挪。
-        if (this.campNeedsWatch() && climateState.climateRuntimeMinutes !== undefined) {
+        if (this.campNeedsWatch() &&
+          (climateState.climateRuntimeMinutes !== undefined || climateState.climateEndingAt > 0)) {
           this.rearmCampWatch();
         }
       }
@@ -1382,6 +1423,9 @@ struct Index {
     copy.tripSinceChargeEnergyWh = state.tripSinceChargeEnergyWh;
     copy.climate = state.climate;
     copy.climateRuntimeMinutes = state.climateRuntimeMinutes;
+    copy.climateEndingAt = state.climateEndingAt;
+    copy.climateStartReason = state.climateStartReason;
+    copy.climateErrors = state.climateErrors.slice();
     copy.air = state.air;
     copy.airQualityIndex = state.airQualityIndex;
     copy.pm25UgM3 = state.pm25UgM3;
@@ -1437,9 +1481,13 @@ struct Index {
       case 'climate':
         this.climate = state.climate;
         this.climateRemainingMinutes = state.climateRuntimeMinutes ?? -1;
+        this.climateEndingAt = state.climateEndingAt;
+        this.climateErrors = state.climateErrors.slice();
+        this.climateStartReason = state.climateStartReason;
         this.applyStreamPhase(ToggleKind.CLIMATE, state.climate, '开启', '关闭');
         // 车端给了新的剩余时长 → 停机时刻变了，守候窗口要按新的时刻重排。
-        if (this.campNeedsWatch() && state.climateRuntimeMinutes !== undefined) {
+        if (this.campNeedsWatch() &&
+          (state.climateRuntimeMinutes !== undefined || state.climateEndingAt > 0)) {
           this.rearmCampWatch();
         }
         // 露营模式是靠驻车空调支撑的。空调被关掉有两种情况：
@@ -1787,6 +1835,11 @@ struct Index {
     } else if (state.locked === '已锁') {
       this.lockPhase = TogglePhase.OFF;
     }
+    // 空调的错误码与结束时刻要先落定 —— 下面判断「要不要续开」时要用到，
+    // 顺序不能反。
+    this.climateErrors = state.climateErrors.slice();
+    this.climateEndingAt = state.climateEndingAt;
+    this.climateStartReason = state.climateStartReason;
     if (state.climate === '开启') {
       this.climatePhase = TogglePhase.ON;
     } else if (state.climate === '关闭') {
@@ -1834,6 +1887,8 @@ struct Index {
     // 空调 / 净化到时会自动关闭，开启期间要持续检查才能让按钮回落。
     // 剩余时长用来推算预计结束时刻，把状态检查排在那之前。
     this.climateRemainingMinutes = state.climateRuntimeMinutes ?? -1;
+    this.climateEndingAt = state.climateEndingAt;
+    this.climateErrors = state.climateErrors.slice();
     this.airRemainingMinutes = state.airRuntimeMinutes ?? -1;
     // AQI / PM2.5 缺失时沿用旧值（快照路径也可能是残缺响应）
     if (state.airQualityIndex !== undefined) {
@@ -1844,7 +1899,8 @@ struct Index {
     }
     this.syncClimateTimer();
     // 快照里的剩余时长也会改变停机时刻 —— 守候窗口跟着挪。
-    if (this.campNeedsWatch() && state.climateRuntimeMinutes !== undefined) {
+    if (this.campNeedsWatch() &&
+      (state.climateRuntimeMinutes !== undefined || state.climateEndingAt > 0)) {
       this.rearmCampWatch();
     }
 
@@ -2540,24 +2596,41 @@ struct Index {
       return;
     }
     const now = Date.now();
-    const expectedEnd = this.climateExpectedEnd;
     let delay: number = Index.CAMP_WATCH_BOOTSTRAP_MS;
     if (settleMs > 0) {
-      // 刚续开过 —— 等车端把新的剩余时长报上来再排窗口，
-      // 否则会读到续开前的旧剩余时长，把窗口排错位置。
+      // 刚续开过 —— 等车端把新的结束时刻报上来再排窗口，
+      // 否则会读到续开前的旧值，把窗口排错位置。
       delay = settleMs;
-    } else if (expectedEnd > 0) {
-      // 锚点已知 —— 直接算出窗口开启时刻。
-      delay = expectedEnd - Index.CAMP_WATCH_LEAD_MS - now;
-      if (delay < 0) {
-        // 已经进窗口了 —— 空调可能正在停，立刻查一次。
-        delay = 0;
+    } else {
+      const wait = this.campWatchWaitMs(now);
+      if (wait !== undefined) {
+        delay = wait;
       }
     }
-    // 锚点未知时用很短的引导延迟 —— 先读一次车端状态拿到剩余时长，
-    // 之后就能算出精确的停机时刻。
+    // 推不出停机时刻时用很短的引导延迟 —— 先读一次车端状态拿到结束时刻，
+    // 之后就能算出精确的窗口开启时刻。
     this.scheduleCampWatchTick(delay);
     Log.info(`露营守候窗口已安排，${Math.round(delay / 1000)} 秒后开始`);
+  }
+
+  /**
+   * 算出距离守候窗口开启还有多久。
+   *
+   * 停机时刻有两个来源，优先级从高到低：
+   *   1. `endingAt` —— 车端自己算的绝对时刻，秒级精度，没有取整误差
+   *   2. `climateExpectedEnd` —— 本地按剩余分钟数推算的锚点
+   *
+   * @param now 当前时刻
+   * @returns 等待毫秒数；推不出停机时刻时返回 undefined
+   */
+  private campWatchWaitMs(now: number): number | undefined {
+    const stopAt = this.climateEndingAt > 0 ? this.climateEndingAt : this.climateExpectedEnd;
+    if (stopAt <= 0) {
+      return undefined;
+    }
+    const wait = stopAt - Index.CAMP_WATCH_LEAD_MS - now;
+    // 已经进窗口了 —— 空调可能正在停，立刻查一次。
+    return wait > 0 ? wait : 0;
   }
 
   /**
@@ -2577,30 +2650,25 @@ struct Index {
   }
 
   /**
-   * 按最新的空调剩余时长重排守候窗口。
+   * 按最新的空调结束时刻重排守候窗口。
    *
-   * 车端每次给出新的剩余分钟数，停机时刻就变了 ——
+   * 车端每次给出新的结束时刻，停机点就变了 ——
    * 守候窗口要跟着挪，否则会守着旧时刻白等。
    *
    * 只在「还没进窗口」时重排。已经在窗口里了（每 60 秒轮询中）
-   * 就不用动 —— 那条链路自己会按新的剩余时长继续。
+   * 就不用动 —— 那条链路自己会按新的结束时刻继续。
    */
   private rearmCampWatch(): void {
     if (!this.campNeedsWatch()) {
       return;
     }
-    const remaining = this.climateRemainingMinutes;
-    if (remaining < 0) {
-      return;
-    }
-    const stopAt = Date.now() + remaining * 60000;
-    const wait = stopAt - Index.CAMP_WATCH_LEAD_MS - Date.now();
-    if (wait <= 0) {
-      // 已经在窗口里了 —— 让现有的轮询链路继续，不重排。
+    const wait = this.campWatchWaitMs(Date.now());
+    if (wait === undefined || wait <= 0) {
+      // 推不出停机时刻，或已经在窗口里了 —— 让现有的轮询链路继续，不重排。
       return;
     }
     this.scheduleCampWatchTick(wait);
-    Log.info(`露营守候窗口按新的剩余时长重排，${Math.round(wait / 1000)} 秒后开始`);
+    Log.info(`露营守候窗口按新的结束时刻重排，${Math.round(wait / 1000)} 秒后开始`);
   }
 
   /**
@@ -2622,12 +2690,9 @@ struct Index {
    * 守候窗口的一次检查。
    *
    * 读一次车端真实状态：
-   *   - 空调已停 → 安排续开
-   *   - 空调还开着 → 按车端给的剩余时长算出下一次停机时刻，
+   *   - 空调已停 → 按错误码决定要不要续开
+   *   - 空调还开着 → 按车端给的结束时刻算出下一次停机点，
    *     还远就退出窗口静默等待，快到了就继续每 60 秒轮询
-   *
-   * 车端给的「剩余分钟数」是最准的停机依据 —— 比本地锚点可靠
-   * （锚点是推算出来的，车端剩余值取整会有误差）。
    *
    * 读不到状态不能当作「空调停了」—— 不能据此就重发指令。
    */
@@ -2641,24 +2706,25 @@ struct Index {
     }
     try {
       const state = await repository.readDomain('climate', this.vin);
+      this.climateErrors = state.climateErrors.slice();
+      this.climateStartReason = state.climateStartReason;
       if (state.climate === '关闭') {
         this.scheduleCampClimateRestart('守候窗口发现空调已停');
         return;
       }
       // 空调还开着 —— 车端给了新的运行窗口。
-      const remaining = state.climateRuntimeMinutes;
-      if (remaining === undefined) {
-        // 拿不到剩余时长 —— 不知道什么时候停，只能按固定间隔守着。
+      if (state.climateEndingAt > 0) {
+        this.climateEndingAt = state.climateEndingAt;
+      }
+      if (state.climateRuntimeMinutes === undefined && state.climateEndingAt <= 0) {
+        // 拿不到结束时刻 —— 不知道什么时候停，只能按固定间隔守着。
         this.scheduleCampWatchTick(Index.CAMP_WATCH_FALLBACK_INTERVAL_MS);
         return;
       }
-      this.climateRemainingMinutes = remaining;
+      this.climateRemainingMinutes = state.climateRuntimeMinutes ?? -1;
       this.syncCountdownAnchors();
-      // 停机时刻 = 现在 + 车端给的剩余时长。
-      const stopAt = Date.now() + remaining * 60000;
-      const openAt = stopAt - Index.CAMP_WATCH_LEAD_MS;
-      const wait = openAt - Date.now();
-      if (wait > 0) {
+      const wait = this.campWatchWaitMs(Date.now());
+      if (wait !== undefined && wait > 0) {
         // 停机点还远 —— 退出窗口，静默等待。
         this.scheduleCampWatchTick(wait);
       } else {
@@ -2688,6 +2754,22 @@ struct Index {
       // 已经排过了，不重复排。
       return;
     }
+    // 车端报了「撞到最大运行时长」以外的错误 → 不该续开。
+    //
+    // 电量不足 / 燃油低 / 暂时不可用时续开只会反复失败，
+    // 而电量低的时候开空调本身就不该做 —— 与其重试到上限再放弃，
+    // 不如现在就停并把原因告诉用户。
+    //
+    // 注意：错误列表为空时**不能**在这里放弃 ——
+    // 有些车端在正常停机时并不带错误码，那种情况该续开还是要续。
+    if (this.climateErrors.length > 0 &&
+      !this.climateErrors.includes(Index.CLIMATE_ERROR_MAX_RUNTIME)) {
+      const detail = Index.climateErrorText(this.climateErrors);
+      Log.warn(`露营模式：空调停机原因不是到时停机（${detail}），放弃续开`);
+      this.abortCamp(detail.length > 0 ? `驻车空调已停止（${detail}），露营模式已结束` :
+        '驻车空调已停止，露营模式已结束');
+      return;
+    }
     if (this.campRestartCount >= Index.CAMP_CLIMATE_MAX_RESTARTS) {
       Log.warn('露营模式续开次数已达上限，放弃续开');
       this.abortCamp('驻车空调无法重新启动，露营模式已结束');
@@ -2698,6 +2780,51 @@ struct Index {
       this.campRestartTimer = -1;
       this.restartCampClimate();
     }, Index.CAMP_CLIMATE_RESTART_DELAY_MS);
+  }
+
+  /**
+   * 把空调错误码翻译成可读文案。
+   *
+   * 对应 ParkingClimatization.ErrorType：
+   *   1=燃油低 2=电量低 3=未连接电源 4=无需启动 5=需要保养
+   *   6=暂时不可用 7=检测到持续故障 8=已达最大运行时长
+   *
+   * @param errors 错误码列表
+   * @returns 文案；没有可识别的错误时返回空串
+   */
+  private static climateErrorText(errors: number[]): string {
+    const labels: string[] = [];
+    for (const code of errors) {
+      switch (code) {
+        case 1:
+          labels.push('燃油不足');
+          break;
+        case 2:
+          labels.push('电量不足');
+          break;
+        case 3:
+          labels.push('未连接电源');
+          break;
+        case 4:
+          labels.push('无需启动');
+          break;
+        case 5:
+          labels.push('需要保养');
+          break;
+        case 6:
+          labels.push('暂时不可用');
+          break;
+        case 7:
+          labels.push('检测到持续故障');
+          break;
+        case 8:
+          labels.push('已达最大运行时长');
+          break;
+        default:
+          break;
+      }
+    }
+    return labels.join('、');
   }
 
   /**

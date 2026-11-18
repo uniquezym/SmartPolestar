@@ -43,6 +43,31 @@ export class VehicleState {
   climateRunMode: string = '未知';
   climateTemperatureC: number | undefined = undefined;
   climateTargetTemperatureC: number | undefined = undefined;
+  /**
+   * 车端算出的空调结束时刻（epoch millis）。
+   *
+   * ParkingClimatization field 16 = endingAt（Timestamp）。
+   *
+   * 比「现在 + 剩余分钟数」准：剩余分钟数是整数（取整误差最多 ±1 分钟），
+   * 而 endingAt 是车端自己算的绝对时刻，秒级精度。
+   * 露营模式的守候窗口用它来算窗口开启时刻。
+   */
+  climateEndingAt: number = 0;
+  /**
+   * 空调启动原因。ParkingClimatization field 15。
+   *
+   * 0=未指定 1=车内手动 2=远程 3=定时 4=保持空调。
+   * 露营续开时用来区分「我们远程开的」与「车端定时任务开的」。
+   */
+  climateStartReason: number = -1;
+  /**
+   * 空调错误码列表。ParkingClimatization field 4（repeated enum）。
+   *
+   * 其中 8 = REACHED_MAX_RUNTIME —— 撞到车端单次运行时长上限而停机。
+   * 这与「电量不足 / 故障 / 用户手动关」性质完全不同：
+   * 前者应当续开，后者续开只会一直失败。
+   */
+  climateErrors: number[] = [];
 
   // ---- 车锁 / 门 / 窗 ----
   locked: string = '未知';
