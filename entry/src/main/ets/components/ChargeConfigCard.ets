@@ -291,51 +291,71 @@ export struct ChargeConfigCard {
       .border({ width: { top: 1 }, color: $r('app.color.app_rule') })
 
       // ---------- 预约时段 ----------
+      // 标题在左，两个时刻块在右 —— 与上方三行的「标签 + 右侧取值」结构一致。
+      // 时刻块等宽，开始/结束视觉上对齐，扫一眼就知道这是一对。
       Row() {
-        Text(this.startText())
+        Text('预约时段')
           .fontSize(13.5)
           .fontColor($r('app.color.app_primary_text'))
-          .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-          .backgroundColor($r('app.color.app_surface_sunken'))
-          .borderRadius(4)
-          .onClick(() => {
-            this.pickTime(this.timerStartMinutes, (minutes: number) => {
-              if (this.onTimerChange !== undefined) {
-                this.onTimerChange(minutes, this.timerStopMinutes);
-              }
-            });
-          })
 
-        Text('→')
-          .fontSize(12)
-          .fontColor($r('app.color.app_tertiary_text'))
-          .margin({ left: 8, right: 8 })
+        Blank()
 
-        Text(this.stopText())
-          .fontSize(13.5)
-          .fontColor($r('app.color.app_primary_text'))
-          .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-          .backgroundColor($r('app.color.app_surface_sunken'))
-          .borderRadius(4)
-          .onClick(() => {
-            this.pickTime(this.timerStopMinutes, (minutes: number) => {
-              if (this.onTimerChange !== undefined) {
-                this.onTimerChange(this.timerStartMinutes, minutes);
-              }
-            });
-          })
+        Row({ space: 6 }) {
+          Text(this.startText())
+            .fontSize(13.5)
+            .fontColor($r('app.color.app_primary_text'))
+            .textAlign(TextAlign.Center)
+            .constraintSize({ minWidth: 56 })
+            .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+            .backgroundColor($r('app.color.app_surface_sunken'))
+            .borderRadius(4)
+            .onClick(() => {
+              this.pickTime(this.timerStartMinutes, (minutes: number) => {
+                if (this.onTimerChange !== undefined) {
+                  this.onTimerChange(minutes, this.timerStopMinutes);
+                }
+              });
+            })
 
-        if (this.crossDay()) {
-          Text('次日')
-            .fontSize(11)
+          Text('→')
+            .fontSize(12)
             .fontColor($r('app.color.app_tertiary_text'))
-            .margin({ left: 8 })
+
+          Text(this.stopText())
+            .fontSize(13.5)
+            .fontColor($r('app.color.app_primary_text'))
+            .textAlign(TextAlign.Center)
+            .constraintSize({ minWidth: 56 })
+            .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+            .backgroundColor($r('app.color.app_surface_sunken'))
+            .borderRadius(4)
+            .onClick(() => {
+              this.pickTime(this.timerStopMinutes, (minutes: number) => {
+                if (this.onTimerChange !== undefined) {
+                  this.onTimerChange(this.timerStartMinutes, minutes);
+                }
+              });
+            })
         }
+        .alignItems(VerticalAlign.Center)
       }
       .width('100%')
       .alignItems(VerticalAlign.Center)
-      .padding({ top: 4, bottom: 11 })
+      .padding({ top: 11, bottom: 11 })
       .border({ width: { top: 1 }, color: $r('app.color.app_rule') })
+
+      // 跨天标记单独一行 —— 挤在时刻块后面会把整行撑开，
+      // 也容易被误读成是结束时刻的一部分。
+      if (this.crossDay()) {
+        Row() {
+          Text('次日结束')
+            .fontSize(11)
+            .fontColor($r('app.color.app_tertiary_text'))
+        }
+        .width('100%')
+        .justifyContent(FlexAlign.End)
+        .padding({ bottom: 11 })
+      }
 
       // ---------- 保存配置 ----------
       Button('保存配置', { type: ButtonType.Normal })
