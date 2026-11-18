@@ -1,4 +1,5 @@
 import { GrpcClient } from './grpc/GrpcClient';
+import { ChargeConfig } from './ChargeConfig';
 import { ProtoReader, ProtoValue } from '../proto/ProtoReader';
 import {
   VehicleState, CHARGING_LABELS, CHARGER_CONNECTION_LABELS, CHARGING_TYPE_LABELS,
@@ -248,6 +249,27 @@ export class VehicleStateReader {
     // 状态检查安排在那一刻前后即可，不必固定周期轮询。
     state.airRuntimeMinutes = ProtoValue.asInteger(ProtoValue.get(fields, 11));
     state.airStateAt = Date.now();
+  }
+
+  /**
+   * 读取充电配置（充电上限 / 电流上限 / 预约充电时段）。
+   *
+   * 这三项来自三个独立的 chronos 服务，不在状态域里，
+   * 所以这里逐个服务单独读，不走 callStatus（那套是 vehiclestates 系的格式）。
+   *
+   * 读失败不影响其他项 —— 某一项拿不到就保持 -1 / 未设置，
+   * 卡片上对应位置显示「—」。
+   */
+  static async readChargeConfig(client: GrpcClient, vin: string, state: VehicleState): Promise<void> {
+    const snapshot = await ChargeConfig.readChargeTimer(client, vin);
+    state.targetSoc = await ChargeConfig.readTargetSoc(client, vin);
+    state.ampLimit = await ChargeConfig.readAmpLimit(client, vin);
+    state.chargeTimerActivated = snapshot.timerActivated;
+    state.chargeTimerStartMinutes = ChargeConfig.minutesOf(snapshot.timerStart);
+    state.chargeTimerStopMinutes = ChargeConfig.minutesOf(snapshot.timerStop);
+    Log.info(`充电配置: 上限=${state.targetSoc}% 电流=${state.ampLimit}A ` +
+      `预约=${state.chargeTimerStartMinutes}/${state.chargeTimerStopMinutes} ` +
+      `启用=${state.chargeTimerActivated}`);
   }
 
   /**

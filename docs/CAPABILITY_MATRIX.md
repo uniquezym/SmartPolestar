@@ -30,6 +30,9 @@
 | `services.vehiclestates.health.HealthService` | C3 | 车辆健康与保养 |
 | `invocation.InvocationService` | C3 | 全部车控指令下发 |
 | `chronos.services.v1.ParkingClimateTimerService` | LBS | 驻车空调定时任务 |
+| `chronos.services.v1.TargetSocService` | LBS | 充电上限（目标电量） |
+| `chronos.services.v1.AmpLimitService` | LBS | 电流上限 |
+| `chronos.services.v2.GlobalChargeTimerService` | LBS | 预约充电时段 |
 | `dtlinternet.DtlInternetService` | LBS | 最后停车位置 |
 | `car_information.CarInformation` | C3 | 账号下车辆列表与车型 |
 | `ota_mobcache.OtaDiscoveryService` | C3 | 软件版本与 OTA 状态 |
@@ -236,7 +239,87 @@
 | 5（任务内） | 是否循环 |
 | 6（任务内） | 生效日集合 |
 
-### 2.10 软件版本与 OTA
+### 2.10 充电配置（充电上限 / 电流上限 / 预约充电）
+
+这三项**不在 battery domain 里**，各有独立的 chronos 服务。三个服务全部走 **LBS 主机**（与同族的 `ParkingClimateTimerService` 同一条路径）。
+
+**公共请求体 `ChronosRequest`**
+
+| 字段 | 含义 | 取值 |
+|---|---|---|
+| 1 | 请求 UUID | string，每次请求新生成 |
+| 2 | VIN | string |
+| 3 | source | string，固定 `"RCS"` |
+| 4 | 时区 | 嵌套消息，field 1 = 相对 UTC 的分钟偏移（东八区为 +480） |
+
+**2.10.1 充电上限（目标电量）**
+
+| 项 | 内容 |
+|---|---|
+| 服务 | `chronos.services.v1.TargetSocService` |
+| 方法 | `GetLatestTargetSoc`（UNARY） / `SetTargetSoc`（SERVER_STREAMING） |
+| 主机 | LBS |
+| 请求体 | field 1 = `ChronosRequest` |
+| 查询能力 | 当前充电上限（目标电量百分比） |
+
+`SetTargetSocRequest`：
+
+| 字段 | 含义 | 取值 |
+|---|---|---|
+| 1 | request | `ChronosRequest` |
+| 2 | batteryChargeTargetLevel | 整数百分比 |
+| 3 | chargeTargetLevelSettingType | 枚举：0=未指定 1=每日 2=长途 3=自定义 |
+
+读取响应 `GetTargetSocResponse`：field 3 = `TargetSoc`（内含 field 1 = `batteryChargeTargetLevel`）、field 4 = 待生效值。
+
+**2.10.2 电流上限**
+
+| 项 | 内容 |
+|---|---|
+| 服务 | `chronos.services.v1.AmpLimitService` |
+| 方法 | `GetAmpLimit`（SERVER_STREAMING） / `SetAmpLimit`（SERVER_STREAMING） |
+| 主机 | LBS |
+| 请求体 | field 1 = `ChronosRequest` |
+| 查询能力 | 当前电流上限（安培） |
+
+`SetAmpLimitRequest`：field 1 = `ChronosRequest`，field 2 = `ampLimit`（整数安培）。
+
+读取响应 `GetAmpLimitResponse`：field 3 = `AmpLimit`（内含 field 1 = `ampLimit`）、field 4 = 待生效值。
+
+**2.10.3 预约充电时段**
+
+| 项 | 内容 |
+|---|---|
+| 服务 | `chronos.services.v2.GlobalChargeTimerService` |
+| 方法 | `GetGlobalChargeTimer`（UNARY） / `SetGlobalChargeTimer`（UNARY） |
+| 主机 | LBS |
+| 请求体 | field 1 = `ChronosRequest` |
+| 查询能力 | 预约充电是否启用、开始时刻、结束时刻 |
+
+`SetGlobalChargeTimerRequest`：
+
+| 字段 | 含义 | 取值 |
+|---|---|---|
+| 1 | request | `ChronosRequest` |
+| 2 | chargeTimer | `GlobalChargeTimer` |
+| 3 | timeIsUtc0 | 布尔，false 表示传的是本地时间 |
+
+`GlobalChargeTimer`：
+
+| 字段 | 含义 |
+|---|---|
+| 1 | start（`DailyTime`：field 1 小时 / field 2 分钟 / field 3 时区） |
+| 2 | stop（`DailyTime`） |
+| 3 | activated（布尔） |
+| 4 | metadata |
+
+读取响应 `GetGlobalChargeTimerResponse`：field 1 = `GlobalChargeTimer`、field 2 = 待生效值。
+
+**跨天说明**：开始与结束是两个独立时刻，`start > stop` 即为次日结束，车端自行判断，协议层无需特殊编码。
+
+**写入响应状态码**：`Status` 枚举 —— 0=未知错误 1=已发送 2=已送达 3=成功 4=已同步 5=车辆离线 6=车辆错误 7=错误 8=已被替换。`SetTargetSocResponse` / `SetAmpLimitResponse` 的 status 在 field 3、message 在 field 4；`SetGlobalChargeTimerResponse` 的 status 在 field 2、message 在 field 3。
+
+### 2.11 软件版本与 OTA
 
 | 项 | 内容 |
 |---|---|
@@ -377,6 +460,18 @@
 | 5 | 是否循环（varint 0/1） |
 | 6 | 生效日集合（重复 varint） |
 
+### 3.8 充电配置
+
+充电配置不走 `invocation.InvocationService`，而是有三个独立的 chronos 服务，全部走 LBS 主机。协议细节见 2.10。
+
+| 配置项 | 服务 | 读方法 | 写方法 | 写入字段 |
+|---|---|---|---|---|
+| 充电上限 | `chronos.services.v1.TargetSocService` | `GetLatestTargetSoc` | `SetTargetSoc` | field 2 = 目标电量百分比，field 3 = 设置类型（固定 3 自定义） |
+| 电流上限 | `chronos.services.v1.AmpLimitService` | `GetAmpLimit` | `SetAmpLimit` | field 2 = 电流上限（安培） |
+| 预约充电 | `chronos.services.v2.GlobalChargeTimerService` | `GetGlobalChargeTimer` | `SetGlobalChargeTimer` | field 2 = `GlobalChargeTimer`（起止时刻 + 启用开关），field 3 = 是否 UTC0 |
+
+三个写方法的请求体都以 field 1 携带 `ChronosRequest`（VIN / source / 时区 / 请求 UUID）。
+
 ---
 
 ## 四、账号与令牌接口
@@ -396,7 +491,7 @@
 
 | 维度 | 结论 |
 |---|---|
-| 状态查询 | 覆盖 10 类状态域：车辆信息、电池充电、外饰、驻车空调、空气净化、里程能耗、健康保养、停车位置、空调定时、OTA |
-| 功能控制 | 覆盖 7 类控制域：车锁（整车 + 尾门）、尾门开合、车窗开合、驻车空调、空气净化、寻车、空调定时 |
-| 已知限制 | 车窗只能四窗整组开关，无单车窗控制；驻车空调目标温度固定 22℃，不可设定；门与机盖、充电口仅可查不可控 |
-| 未开放的域 | 充电功率、充电电流、充满时间、目标温度、空调循环模式（内循环 / 外循环）、充电计划、充电时段等均为只读，无对应控制接口 |
+| 状态查询 | 覆盖 11 类状态域：车辆信息、电池充电、外饰、驻车空调、空气净化、里程能耗、健康保养、停车位置、空调定时、充电配置、OTA |
+| 功能控制 | 覆盖 8 类控制域：车锁（整车 + 尾门）、尾门开合、车窗开合、驻车空调、空气净化、寻车、空调定时、充电配置（充电上限 / 电流上限 / 预约充电） |
+| 已知限制 | 车窗只能四窗整组开关，无单车窗控制；门与机盖、充电口仅可查不可控 |
+| 未开放的域 | 充电功率、充电电流、充满时间、空调循环模式（内循环 / 外循环）、充电地点级充电计划等均为只读，无对应控制接口 |

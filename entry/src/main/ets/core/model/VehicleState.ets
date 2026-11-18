@@ -24,6 +24,34 @@ export class VehicleState {
   powerWatts: number | undefined = undefined;
   currentAmps: number | undefined = undefined;
 
+  // ---- 充电配置 ----
+  // 这三项都不在 battery domain 里，各有独立服务（见 core/net/ChargeConfig）。
+  /**
+   * 充电上限（目标电量百分比）。
+   *
+   * 来自 chronos.services.v1.TargetSocService，
+   * 实体 TargetSoc 的 field 1 = batteryChargeTargetLevel。
+   */
+  targetSoc: number = -1;
+  /**
+   * 电流上限（安培）。
+   *
+   * 来自 chronos.services.v1.AmpLimitService，
+   * 实体 AmpLimit 的 field 1 = ampLimit。
+   */
+  ampLimit: number = -1;
+  /**
+   * 预约充电是否启用。
+   *
+   * 来自 chronos.services.v2.GlobalChargeTimerService，
+   * 实体 GlobalChargeTimer 的 field 3 = activated。
+   */
+  chargeTimerActivated: boolean = false;
+  /** 预约充电开始时刻（自 00:00 起的分钟数），-1 表示未设置。 */
+  chargeTimerStartMinutes: number = -1;
+  /** 预约充电结束时刻（自 00:00 起的分钟数），-1 表示未设置。 */
+  chargeTimerStopMinutes: number = -1;
+
   // ---- 能耗 ----
   // 命名对齐 Android 端 fa0 的 f1751A..f1756F：
   //   tripManual*    手动统计

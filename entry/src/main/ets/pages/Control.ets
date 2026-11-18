@@ -1,5 +1,6 @@
 import { AirPurifyCard } from '../components/AirPurifyCard';
 import { CampModeCard } from '../components/CampModeCard';
+import { ChargeConfigCard } from '../components/ChargeConfigCard';
 import { FindCarCard } from '../components/FindCarCard';
 import { TogglePhase } from '../components/StateToggle';
 import { VehicleCard } from '../components/VehicleCard';
@@ -35,6 +36,22 @@ export struct Control {
   /** 空气净化是否禁用（驻车空调在跑时置灰）。 */
   @Prop airDisabled: boolean = false;
 
+  // ---- 充电配置 ----
+  /** 当前电量（百分比），-1 表示未知。 */
+  @Prop battery: number = -1;
+  /** 充电上限（百分比），-1 表示未知。 */
+  @Prop chargeTargetSoc: number = -1;
+  /** 电流上限（安培），-1 表示未知。 */
+  @Prop chargeAmpLimit: number = -1;
+  /** 预约充电是否启用。 */
+  @Prop chargeTimerActivated: boolean = false;
+  /** 预约开始时刻（自 00:00 起的分钟数），-1 表示未设置。 */
+  @Prop chargeTimerStartMinutes: number = -1;
+  /** 预约结束时刻（自 00:00 起的分钟数），-1 表示未设置。 */
+  @Prop chargeTimerStopMinutes: number = -1;
+  /** 充电配置保存中。 */
+  @Prop chargeSaving: boolean = false;
+
   /** 整车锁阶段（ON = 未锁）。 */
   @Prop lockPhase: TogglePhase = TogglePhase.OFF;
   /** 尾门锁阶段（ON = 未锁）。 */
@@ -52,6 +69,16 @@ export struct Control {
   onCampTemperatureChange?: (celsius: number) => void;
   /** 点击空气净化开关。 */
   onAirToggle?: () => void;
+  /** 修改充电上限。 */
+  onChargeTargetSocChange?: (percent: number) => void;
+  /** 修改电流上限。 */
+  onChargeAmpLimitChange?: (amps: number) => void;
+  /** 修改预约充电开关。 */
+  onChargeTimerToggle?: (activated: boolean) => void;
+  /** 修改预约时段。 */
+  onChargeTimerChange?: (startMinutes: number, stopMinutes: number) => void;
+  /** 保存充电配置。 */
+  onChargeSave?: () => void;
   /** 点击整车锁开关。 */
   onLockToggle?: () => void;
   /** 点击尾门锁开关。 */
@@ -110,6 +137,43 @@ export struct Control {
           onToggle: () => {
             if (this.onAirToggle !== undefined) {
               this.onAirToggle();
+            }
+          }
+        })
+        .margin({ bottom: 11 })
+
+        // ---------- 充电配置 ----------
+        ChargeConfigCard({
+          battery: this.battery,
+          targetSoc: this.chargeTargetSoc,
+          ampLimit: this.chargeAmpLimit,
+          timerActivated: this.chargeTimerActivated,
+          timerStartMinutes: this.chargeTimerStartMinutes,
+          timerStopMinutes: this.chargeTimerStopMinutes,
+          saving: this.chargeSaving,
+          onTargetSocChange: (percent: number) => {
+            if (this.onChargeTargetSocChange !== undefined) {
+              this.onChargeTargetSocChange(percent);
+            }
+          },
+          onAmpLimitChange: (amps: number) => {
+            if (this.onChargeAmpLimitChange !== undefined) {
+              this.onChargeAmpLimitChange(amps);
+            }
+          },
+          onTimerToggle: (activated: boolean) => {
+            if (this.onChargeTimerToggle !== undefined) {
+              this.onChargeTimerToggle(activated);
+            }
+          },
+          onTimerChange: (startMinutes: number, stopMinutes: number) => {
+            if (this.onChargeTimerChange !== undefined) {
+              this.onChargeTimerChange(startMinutes, stopMinutes);
+            }
+          },
+          onSave: () => {
+            if (this.onChargeSave !== undefined) {
+              this.onChargeSave();
             }
           }
         })

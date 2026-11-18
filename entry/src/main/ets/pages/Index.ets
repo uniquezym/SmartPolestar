@@ -4,6 +4,7 @@ import { ControlCoordinator } from '../core/vehicle/ControlCoordinator';
 import { CampModeController } from '../core/vehicle/CampModeController';
 import { BackgroundKeeper } from '../service/BackgroundKeeper';
 import { VehicleCommands } from '../core/net/VehicleCommands';
+import { ChargeConfig } from '../core/net/ChargeConfig';
 import { VehicleState, ChargeStage, ChargeStageResolver } from '../core/model/VehicleState';
 import { AppIcon, AppIconName } from '../components/Icons';
 import { StateToggle, ToggleKind, TogglePhase } from '../components/StateToggle';
@@ -316,6 +317,33 @@ struct Index {
   @State airQualityIndex: number = -1;
   /** PM2.5 浓度（μg/m³），-1 表示未知。控制页空气净化卡片用。 */
   @State pm25UgM3: number = -1;
+
+  // ---- 充电配置 ----
+  /** 当前电量（百分比），-1 表示未知。 */
+  @State batteryLevel: number = -1;
+  /** 充电上限（百分比），-1 表示未知。 */
+  @State chargeTargetSoc: number = -1;
+  /** 电流上限（安培），-1 表示未知。 */
+  @State chargeAmpLimit: number = -1;
+  /** 预约充电是否启用。 */
+  @State chargeTimerActivated: boolean = false;
+  /** 预约开始时刻（自 00:00 起的分钟数），-1 表示未设置。 */
+  @State chargeTimerStartMinutes: number = -1;
+  /** 预约结束时刻（自 00:00 起的分钟数），-1 表示未设置。 */
+  @State chargeTimerStopMinutes: number = -1;
+  /** 充电配置保存中。 */
+  @State chargeSaving: boolean = false;
+  /**
+   * 充电配置**编辑态**。
+   *
+   * 与已生效值分开：用户改完点「保存配置」才下发给车端，
+   * 下发失败时编辑态还在，用户改的东西不会丢。
+   */
+  @State draftChargeSoc: number = -1;
+  @State draftChargeAmp: number = -1;
+  @State draftChargeTimerOn: boolean = false;
+  @State draftChargeStartMinutes: number = -1;
+  @State draftChargeStopMinutes: number = -1;
   /** 逐项健康告警文案，为空表示没有异常。 */
   @State healthWarnings: string[] = [];
   /**
@@ -1224,6 +1252,9 @@ struct Index {
       this.markRefreshed();
       // 把状态同步到桌面卡片
       this.publishCard();
+      // 充电配置来自三个独立的 chronos 服务，不在状态域里，单独读一次。
+      // 读失败不影响主流程 —— 卡片上对应位置显示「—」即可。
+      await this.loadChargeConfig(states[0].vin);
       // 快照拿到了就订阅状态流：之后车端变化由服务端主动推送
       await this.startVehicleStream(states[0].vin);
     } catch (err) {
@@ -1475,6 +1506,7 @@ struct Index {
     switch (domain) {
       case 'battery':
         this.battery = state.battery ?? -1;
+        this.batteryLevel = state.battery ?? -1;
         this.range = state.range ?? -1;
         this.charging = state.charging;
         this.chargerConnection = state.chargerConnection;
@@ -1803,6 +1835,7 @@ struct Index {
     this.contentCodes = state.contentCodes;
 
     this.battery = state.battery ?? -1;
+    this.batteryLevel = state.battery ?? -1;
     this.range = state.range ?? -1;
     this.batteryCapacityKwh = state.batteryCapacityKwh ?? -1;
     this.charging = state.charging;
@@ -3138,6 +3171,138 @@ struct Index {
     await controller.saveTemperature(celsius);
   }
 
+  // ---------- 充电配置 ----------
+
+  /**
+   * 读取充电配置。
+   *
+   * 三个 chronos 服务（TargetSoc / AmpLimit / GlobalChargeTimer）
+   * 不在状态域里，得单独读。读失败不抛 —— 卡片上对应位置显示「—」。
+   *
+   * @param vin 车辆 VIN
+   */
+  private async loadChargeConfig(vin: string): Promise<void> {
+    const repository = this.repository;
+    if (repository === undefined || vin.length === 0) {
+      return;
+    }
+    try {
+      const state = await repository.readChargeConfig(vin);
+      this.chargeTargetSoc = state.targetSoc;
+      this.chargeAmpLimit = state.ampLimit;
+      this.chargeTimerActivated = state.chargeTimerActivated;
+      this.chargeTimerStartMinutes = state.chargeTimerStartMinutes;
+      this.chargeTimerStopMinutes = state.chargeTimerStopMinutes;
+      // 编辑态同步成已生效值
+      this.draftChargeSoc = state.targetSoc;
+      this.draftChargeAmp = state.ampLimit;
+      this.draftChargeTimerOn = state.chargeTimerActivated;
+      this.draftChargeStartMinutes = state.chargeTimerStartMinutes;
+      this.draftChargeStopMinutes = state.chargeTimerStopMinutes;
+    } catch (err) {
+      Log.warn(`读取充电配置失败: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * 修改充电上限（编辑态）。
+   */
+  private changeChargeTargetSoc(percent: number): void {
+    this.draftChargeSoc = percent;
+  }
+
+  /**
+   * 修改电流上限（编辑态）。
+   */
+  private changeChargeAmpLimit(amps: number): void {
+    this.draftChargeAmp = amps;
+  }
+
+  /**
+   * 修改预约充电开关（编辑态）。
+   */
+  private changeChargeTimerToggle(activated: boolean): void {
+    this.draftChargeTimerOn = activated;
+  }
+
+  /**
+   * 修改预约时段（编辑态）。
+   *
+   * @param startMinutes 开始时刻（自 00:00 起的分钟数）
+   * @param stopMinutes  结束时刻（自 00:00 起的分钟数）
+   */
+  private changeChargeTimer(startMinutes: number, stopMinutes: number): void {
+    this.draftChargeStartMinutes = startMinutes;
+    this.draftChargeStopMinutes = stopMinutes;
+  }
+
+  /**
+   * 保存充电配置。
+   *
+   * 三项配置顺序下发，每项独立报错 —— 一项失败不影响其他项，
+   * 最后汇总提示。
+   */
+  private async saveChargeConfig(): Promise<void> {
+    const client = this.repository?.getClient();
+    const vin = this.vin;
+    if (client === undefined || vin.length === 0) {
+      this.toast('会话未就绪，请重试');
+      return;
+    }
+
+    this.chargeSaving = true;
+    const failures: string[] = [];
+    let saved = 0;
+
+    try {
+      if (this.draftChargeSoc >= 0) {
+        const result = await ChargeConfig.setTargetSoc(client, vin, this.draftChargeSoc);
+        if (result.success) {
+          saved++;
+          this.chargeTargetSoc = this.draftChargeSoc;
+        } else {
+          failures.push(result.message);
+        }
+      }
+
+      if (this.draftChargeAmp >= 0) {
+        const result = await ChargeConfig.setAmpLimit(client, vin, this.draftChargeAmp);
+        if (result.success) {
+          saved++;
+          this.chargeAmpLimit = this.draftChargeAmp;
+        } else {
+          failures.push(result.message);
+        }
+      }
+
+      // 预约时段：没设过时刻就跳过（车端不接受空时段）。
+      if (this.draftChargeStartMinutes >= 0 && this.draftChargeStopMinutes >= 0) {
+        const result = await ChargeConfig.setChargeTimer(client, vin, this.draftChargeTimerOn,
+          ChargeConfig.formatMinutes(this.draftChargeStartMinutes),
+          ChargeConfig.formatMinutes(this.draftChargeStopMinutes));
+        if (result.success) {
+          saved++;
+          this.chargeTimerActivated = this.draftChargeTimerOn;
+          this.chargeTimerStartMinutes = this.draftChargeStartMinutes;
+          this.chargeTimerStopMinutes = this.draftChargeStopMinutes;
+        } else {
+          failures.push(result.message);
+        }
+      }
+    } catch (err) {
+      const e = err as BusinessError;
+      failures.push(e.message.length > 0 ? e.message : '保存失败');
+    } finally {
+      this.chargeSaving = false;
+    }
+
+    if (failures.length === 0) {
+      this.toast(saved > 0 ? '充电配置已保存' : '没有需要保存的修改');
+      return;
+    }
+    this.toast(failures.join('；'));
+  }
+
   /**
    * 下发寻车指令（鸣笛 / 闪灯 / 鸣笛并闪灯）。
    *
@@ -4432,6 +4597,28 @@ struct Index {
           },
           onAirToggle: () => {
             this.toggle(ToggleKind.PURIFIER);
+          },
+          battery: this.batteryLevel,
+          chargeTargetSoc: this.draftChargeSoc,
+          chargeAmpLimit: this.draftChargeAmp,
+          chargeTimerActivated: this.draftChargeTimerOn,
+          chargeTimerStartMinutes: this.draftChargeStartMinutes,
+          chargeTimerStopMinutes: this.draftChargeStopMinutes,
+          chargeSaving: this.chargeSaving,
+          onChargeTargetSocChange: (percent: number) => {
+            this.changeChargeTargetSoc(percent);
+          },
+          onChargeAmpLimitChange: (amps: number) => {
+            this.changeChargeAmpLimit(amps);
+          },
+          onChargeTimerToggle: (activated: boolean) => {
+            this.changeChargeTimerToggle(activated);
+          },
+          onChargeTimerChange: (startMinutes: number, stopMinutes: number) => {
+            this.changeChargeTimer(startMinutes, stopMinutes);
+          },
+          onChargeSave: () => {
+            this.saveChargeConfig();
           },
           lockPhase: this.lockPhase,
           trunkLockPhase: this.trunkLockPhase,

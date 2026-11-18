@@ -1,0 +1,360 @@
+import { ChargeConfig } from '../core/net/ChargeConfig';
+
+/**
+ * 充电配置卡片。
+ *
+ * 承载四项能力：
+ *   电量进度条（带充电上限刻度线）+ 电量数值
+ *   充电上限设置
+ *   电流上限设置
+ *   预约充电开关 + 时段设置
+ *
+ * **交互选型**：两个上限用**滚轮选择器**（TextPicker），不用下拉菜单。
+ * 下拉在手机上要长按展开、列表长时还得滚动，操作成本高；
+ * 滚轮是系统级交互，拇指上下滑动即可，而且只能选预设档位 ——
+ * 车端只认整数档位，滑块容易误触到非法值。
+ *
+ * **受控组件**：卡片本身不存编辑态，所有值都由父组件通过 props 下传。
+ * 这三项配置来自三个独立的 chronos 服务（TargetSoc / AmpLimit /
+ * GlobalChargeTimer），改完点「保存配置」才真正下发给车端 ——
+ * 中间过程需要父组件统一管理「编辑值」与「已生效值」。
+ */
+@Component
+export struct ChargeConfigCard {
+  /** 当前电量（百分比），-1 表示未知。 */
+  @Prop battery: number = -1;
+  /** 充电上限（百分比），-1 表示未知。 */
+  @Prop targetSoc: number = -1;
+  /** 电流上限（安培），-1 表示未知。 */
+  @Prop ampLimit: number = -1;
+  /** 预约充电是否启用。 */
+  @Prop timerActivated: boolean = false;
+  /** 预约开始时刻（自 00:00 起的分钟数），-1 表示未设置。 */
+  @Prop timerStartMinutes: number = -1;
+  /** 预约结束时刻（自 00:00 起的分钟数），-1 表示未设置。 */
+  @Prop timerStopMinutes: number = -1;
+  /** 保存中（按钮禁用）。 */
+  @Prop saving: boolean = false;
+
+  /** 修改充电上限。 */
+  onTargetSocChange?: (percent: number) => void;
+  /** 修改电流上限。 */
+  onAmpLimitChange?: (amps: number) => void;
+  /** 修改预约充电开关。 */
+  onTimerToggle?: (activated: boolean) => void;
+  /** 修改预约时段。 */
+  onTimerChange?: (startMinutes: number, stopMinutes: number) => void;
+  /** 保存配置。 */
+  onSave?: () => void;
+
+  /**
+   * 滚轮弹窗的通用包装。
+   *
+   * @param range       档位文案
+   * @param selected    当前选中索引
+   * @param onAccept    确认回调，参数是选中的索引
+   */
+  private showWheel(range: string[], selected: number,
+    onAccept: (index: number) => void): void {
+    this.getUIContext().showTextPickerDialog({
+      range: range,
+      selected: selected,
+      canLoop: false,
+      defaultPickerItemHeight: 44,
+      alignment: DialogAlignment.Center,
+      onAccept: (result: TextPickerResult) => {
+        const raw = result.index;
+        const index = typeof raw === 'number' ? raw : selected;
+        onAccept(index);
+      }
+    });
+  }
+
+  /**
+   * 打开充电上限滚轮。
+   */
+  private pickTargetSoc(): void {
+    const levels = ChargeConfig.SOC_LEVELS;
+    const labels: string[] = levels.map((level: number) => `${level}%`);
+    let selected = levels.indexOf(this.targetSoc);
+    if (selected < 0) {
+      selected = levels.indexOf(80);
+    }
+    this.showWheel(labels, selected, (index: number) => {
+      if (this.onTargetSocChange !== undefined) {
+        this.onTargetSocChange(levels[index]);
+      }
+    });
+  }
+
+  /**
+   * 打开电流上限滚轮。
+   */
+  private pickAmpLimit(): void {
+    const levels = ChargeConfig.AMP_LEVELS;
+    const labels: string[] = levels.map((level: number) => `${level} A`);
+    let selected = levels.indexOf(this.ampLimit);
+    if (selected < 0) {
+      selected = levels.indexOf(16);
+    }
+    this.showWheel(labels, selected, (index: number) => {
+      if (this.onAmpLimitChange !== undefined) {
+        this.onAmpLimitChange(levels[index]);
+      }
+    });
+  }
+
+  /**
+   * 打开时间选择弹窗。
+   *
+   * @param current 当前分钟数
+   * @param onPick  选定时回调
+   */
+  private pickTime(current: number, onPick: (minutes: number) => void): void {
+    const base = current >= 0 ? current : 22 * 60;
+    const date = new Date();
+    date.setHours(Math.floor(base / 60), base % 60, 0, 0);
+    this.getUIContext().showTimePickerDialog({
+      selected: date,
+      useMilitaryTime: true,
+      alignment: DialogAlignment.Center,
+      onAccept: (result: TimePickerResult) => {
+        onPick(result.hour * 60 + result.minute);
+      }
+    });
+  }
+
+  /**
+   * 电量文案。
+   */
+  private batteryText(): string {
+    return this.battery >= 0 ? `${Math.round(this.battery)}%` : '—';
+  }
+
+  /**
+   * 充电上限文案。
+   */
+  private socText(): string {
+    return this.targetSoc >= 0 ? `${this.targetSoc}%` : '—';
+  }
+
+  /**
+   * 电流上限文案。
+   */
+  private ampText(): string {
+    return this.ampLimit >= 0 ? `${this.ampLimit} A` : '—';
+  }
+
+  /**
+   * 预约开始时刻文案。
+   */
+  private startText(): string {
+    return this.timerStartMinutes >= 0 ? ChargeConfig.formatMinutes(this.timerStartMinutes) : '—';
+  }
+
+  /**
+   * 预约结束时刻文案。
+   */
+  private stopText(): string {
+    return this.timerStopMinutes >= 0 ? ChargeConfig.formatMinutes(this.timerStopMinutes) : '—';
+  }
+
+  /**
+   * 是否跨天（结束时刻早于开始时刻）。
+   *
+   * 跨天不需要特殊编码 —— 车端按 start / stop 两个独立时刻自己判断，
+   * start > stop 即视为次日结束。这里只是把「次日」标出来给用户看。
+   */
+  private crossDay(): boolean {
+    return this.timerStartMinutes >= 0 && this.timerStopMinutes >= 0 &&
+      this.timerStopMinutes < this.timerStartMinutes;
+  }
+
+  build() {
+    Column() {
+      // ---------- 卡片头 ----------
+      Row() {
+        Text('充电')
+          .fontSize(14)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.app_primary_text'))
+
+        Blank()
+
+        Text(this.batteryText())
+          .fontSize(13)
+          .fontColor($r('app.color.app_primary_text'))
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+      .margin({ bottom: 13 })
+
+      // ---------- 电量进度条 ----------
+      // 蓝色填充 = 当前电量，竖线 = 充电上限位置。
+      // 上限刻度线画在轨道上，用户一眼看出「还差多少到上限」。
+      Stack({ alignContent: Alignment.TopStart }) {
+        Stack()
+          .width('100%')
+          .height(8)
+          .borderRadius(4)
+          .backgroundColor($r('app.color.app_progress_track'))
+
+        Stack()
+          .width(`${Math.min(100, Math.max(0, this.battery))}%`)
+          .height(8)
+          .borderRadius(4)
+          .backgroundColor($r('app.color.app_accent'))
+
+        // 上限刻度线
+        Stack()
+          .width(2)
+          .height(14)
+          .backgroundColor($r('app.color.app_primary_text'))
+          .borderRadius(1)
+          .position({ x: `${this.targetSoc >= 0 ? this.targetSoc : 0}%` })
+      }
+      .width('100%')
+      .height(14)
+      .margin({ bottom: 4 })
+
+      // ---------- 充电上限 ----------
+      Row() {
+        Text('充电上限')
+          .fontSize(13.5)
+          .fontColor($r('app.color.app_primary_text'))
+
+        Blank()
+
+        Text(this.socText())
+          .fontSize(13.5)
+          .fontColor($r('app.color.app_accent_text'))
+
+        Text('  ▴')
+          .fontSize(11)
+          .fontColor($r('app.color.app_tertiary_text'))
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+      .padding({ top: 11, bottom: 11 })
+      .border({ width: { top: 1 }, color: $r('app.color.app_rule') })
+      .onClick(() => {
+        this.pickTargetSoc();
+      })
+
+      // ---------- 电流上限 ----------
+      Row() {
+        Text('电流上限')
+          .fontSize(13.5)
+          .fontColor($r('app.color.app_primary_text'))
+
+        Blank()
+
+        Text(this.ampText())
+          .fontSize(13.5)
+          .fontColor($r('app.color.app_accent_text'))
+
+        Text('  ▴')
+          .fontSize(11)
+          .fontColor($r('app.color.app_tertiary_text'))
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+      .padding({ top: 11, bottom: 11 })
+      .border({ width: { top: 1 }, color: $r('app.color.app_rule') })
+      .onClick(() => {
+        this.pickAmpLimit();
+      })
+
+      // ---------- 预约充电 ----------
+      Row() {
+        Text('预约充电')
+          .fontSize(13.5)
+          .fontColor($r('app.color.app_primary_text'))
+
+        Blank()
+
+        Toggle({ type: ToggleType.Switch, isOn: this.timerActivated })
+          .selectedColor($r('app.color.app_accent'))
+          .switchPointColor($r('app.color.app_surface'))
+          .width(42)
+          .height(24)
+          .onChange((isOn: boolean) => {
+            if (this.onTimerToggle !== undefined) {
+              this.onTimerToggle(isOn);
+            }
+          })
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+      .padding({ top: 11, bottom: 11 })
+      .border({ width: { top: 1 }, color: $r('app.color.app_rule') })
+
+      // ---------- 预约时段 ----------
+      Row() {
+        Text(this.startText())
+          .fontSize(13.5)
+          .fontColor($r('app.color.app_primary_text'))
+          .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+          .backgroundColor($r('app.color.app_surface_sunken'))
+          .borderRadius(4)
+          .onClick(() => {
+            this.pickTime(this.timerStartMinutes, (minutes: number) => {
+              if (this.onTimerChange !== undefined) {
+                this.onTimerChange(minutes, this.timerStopMinutes);
+              }
+            });
+          })
+
+        Text('→')
+          .fontSize(12)
+          .fontColor($r('app.color.app_tertiary_text'))
+          .margin({ left: 8, right: 8 })
+
+        Text(this.stopText())
+          .fontSize(13.5)
+          .fontColor($r('app.color.app_primary_text'))
+          .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+          .backgroundColor($r('app.color.app_surface_sunken'))
+          .borderRadius(4)
+          .onClick(() => {
+            this.pickTime(this.timerStopMinutes, (minutes: number) => {
+              if (this.onTimerChange !== undefined) {
+                this.onTimerChange(this.timerStartMinutes, minutes);
+              }
+            });
+          })
+
+        if (this.crossDay()) {
+          Text('次日')
+            .fontSize(11)
+            .fontColor($r('app.color.app_tertiary_text'))
+            .margin({ left: 8 })
+        }
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+      .padding({ top: 4, bottom: 11 })
+      .border({ width: { top: 1 }, color: $r('app.color.app_rule') })
+
+      // ---------- 保存配置 ----------
+      Button('保存配置', { type: ButtonType.Normal })
+        .width('100%')
+        .height(42)
+        .fontSize(13.5)
+        .fontColor($r('app.color.app_on_accent'))
+        .backgroundColor($r('app.color.app_accent'))
+        .borderRadius(6)
+        .enabled(!this.saving)
+        .margin({ top: 14 })
+        .onClick(() => {
+          if (this.onSave !== undefined) {
+            this.onSave();
+          }
+        })
+    }
+    .width('100%')
+    .padding({ top: 15, left: 16, right: 16, bottom: 16 })
+    .border({ width: 1, color: $r('app.color.app_rule') })
+    .borderRadius(8)
+  }
+}

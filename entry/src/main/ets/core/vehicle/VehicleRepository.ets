@@ -207,6 +207,22 @@ export class VehicleRepository {
   }
 
   /**
+   * 读取充电配置（充电上限 / 电流上限 / 预约充电时段）。
+   *
+   * 这三项来自三个独立的 chronos 服务，不在状态域里，
+   * 因此单独提供一个读取入口。
+   *
+   * @param vin 车辆 VIN
+   */
+  async readChargeConfig(vin: string): Promise<VehicleState> {
+    const client = await this.prepare();
+    const state = new VehicleState();
+    state.vin = vin;
+    await VehicleStateReader.readChargeConfig(client, vin, state);
+    return state;
+  }
+
+  /**
    * 读取全部车辆状态。
    */
   async readAllStates(): Promise<VehicleState[]> {

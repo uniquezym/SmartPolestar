@@ -24,6 +24,20 @@ export class GrpcClient {
   static readonly SERVICE_INVOCATION: string = 'invocation.InvocationService';
   static readonly SERVICE_CLIMATE_TIMER: string = 'chronos.services.v1.ParkingClimateTimerService';
   static readonly SERVICE_DTL_INTERNET: string = 'dtlinternet.DtlInternetService';
+  /**
+   * 充电上限服务。官方 proto：chronos.services.v1.TargetSocService。
+   *
+   * 走 LBS 主机（与同族的 ParkingClimateTimerService 同一条路径）。
+   */
+  static readonly SERVICE_TARGET_SOC: string = 'chronos.services.v1.TargetSocService';
+  /**
+   * 电流上限服务。官方 proto：chronos.services.v1.AmpLimitService。
+   */
+  static readonly SERVICE_AMP_LIMIT: string = 'chronos.services.v1.AmpLimitService';
+  /**
+   * 预约充电时段服务。官方 proto：chronos.services.v2.GlobalChargeTimerService。
+   */
+  static readonly SERVICE_CHARGE_TIMER: string = 'chronos.services.v2.GlobalChargeTimerService';
 
   /**
    * 服务端流方法名 —— 对应各服务的 SERVER_STREAMING 方法。
