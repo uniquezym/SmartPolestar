@@ -218,6 +218,9 @@ export struct ChargeConfigCard {
       .margin({ bottom: 4 })
 
       // ---------- 充电上限 ----------
+      // 数值用「灰底圆角块」包起来，和下面的预约时段保持一致 ——
+      // 块状样式本身就暗示「这是可点的」，比加一个 ▴ 箭头更明确，
+      // 也不需要额外的视觉符号去解释。
       Row() {
         Text('充电上限')
           .fontSize(13.5)
@@ -227,11 +230,10 @@ export struct ChargeConfigCard {
 
         Text(this.socText())
           .fontSize(13.5)
-          .fontColor($r('app.color.app_accent_text'))
-
-        Text('  ▴')
-          .fontSize(11)
-          .fontColor($r('app.color.app_tertiary_text'))
+          .fontColor($r('app.color.app_primary_text'))
+          .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+          .backgroundColor($r('app.color.app_surface_sunken'))
+          .borderRadius(4)
       }
       .width('100%')
       .alignItems(VerticalAlign.Center)
@@ -251,11 +253,10 @@ export struct ChargeConfigCard {
 
         Text(this.ampText())
           .fontSize(13.5)
-          .fontColor($r('app.color.app_accent_text'))
-
-        Text('  ▴')
-          .fontSize(11)
-          .fontColor($r('app.color.app_tertiary_text'))
+          .fontColor($r('app.color.app_primary_text'))
+          .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+          .backgroundColor($r('app.color.app_surface_sunken'))
+          .borderRadius(4)
       }
       .width('100%')
       .alignItems(VerticalAlign.Center)
