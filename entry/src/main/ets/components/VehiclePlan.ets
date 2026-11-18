@@ -434,15 +434,27 @@ export struct VehiclePlan {
           .width(`${this.viewW}px`)
           .height(`${this.viewH}px`)
 
-        // 尾门热区：透明 Path，承载点击。
-        // 必须放在这个 Stack 的**最后**（最上层）—— 车身轮廓、尾灯、
-        // 内部分隔线虽然 fill 透明，仍会按几何形状参与命中测试并吃掉
-        // 点击，垫在它们下面就点不到尾门板。
-        Path({ commands: 'M39 254 L161 254 C161 294 142 328 100 328 C58 328 39 298 39 254 Z' })
+      }
+      .width(`${this.viewW}px`)
+      .height(`${this.viewH}px`)
+      .scale(this.planScale())
+
+      // ---------- 尾门热区 ----------
+      //
+      // 必须是**独立的小盒子**，不能沿用车身线稿 Stack 里那个覆盖全图的
+      // Path —— 那个 Path 的元素框是 200×340，点车模任意位置都会命中它，
+      // 尾门就被误触发了。
+      //
+      // 这里给热区单独一个只有尾部大小的盒子（122×74vp），放在车模坐标系
+      // 的 (39,254)。Path 按**几何形状**参与命中测试，
+      // 所以半圆之外的角落（矩形的四个角）不会响应点击。
+      Stack({ alignContent: Alignment.TopStart }) {
+        Path({ commands: 'M0 0 L122 0 C122 40 103 74 61 74 C19 74 0 44 0 0 Z' })
           .fill(Color.Transparent)
           .stroke(Color.Transparent)
-          .width(`${this.viewW}px`)
-          .height(`${this.viewH}px`)
+          .width(`${122}px`)
+          .height(`${74}px`)
+          .scale(this.planScale())
           .onClick(() => {
             if (this.trunkBusy) {
               return;
@@ -452,9 +464,9 @@ export struct VehiclePlan {
             }
           })
       }
-      .width(`${this.viewW}px`)
-      .height(`${this.viewH}px`)
-      .scale(this.planScale())
+      .width(122)
+      .height(74)
+      .position({ x: 39, y: 254 })
 
       // ---------- 位置标记点（vp 坐标，与缩放后的车模对齐） ----------
       this.marker(new PlanMarker(100, 22, '盖', this.hoodOpen))

@@ -349,6 +349,17 @@ struct Index {
   @State trunkUnlocked: boolean = false;
   /** 尾门指令执行中 —— 标记点显示蓝色描边与旋转指示器。 */
   @State trunkBusy: boolean = false;
+  /**
+   * 尾门锁指令的目标解锁态。
+   *
+   * 车模上的旋转指示器（trunkBusy）在指令返回时就收了，但指令返回
+   * 只说明「指令发出去了」，不代表车端已经执行完。车端状态到达前，
+   * 指示器还得留着 —— 否则用户点了没反馈。
+   *
+   * 这个字段记下目标态：车端状态与目标一致时就能收指示器，
+   * 不一致说明车端还没执行完，继续转。
+   */
+  private trunkBusyTargetUnlocked: boolean = false;
   /** 机盖开启 —— 车模标记点显示警示色。 */
   @State hoodOpen: boolean = false;
   /** 充电口开启 —— 车模标记点显示警示色。 */
@@ -1529,6 +1540,10 @@ struct Index {
         }
         this.applyStreamPhase(ToggleKind.TRUNK_LOCK, state.tailgateLock, '未锁', '已锁');
         this.applyStreamPhase(ToggleKind.TRUNK, state.tailgate, '已打开', '已关闭');
+        // 尾门状态一到就把执行动效收掉 —— 状态已经变了，
+        // 转圈还在转就是错的状态呈现。
+        this.settleTrunkState(state.tailgate, state.tailgateLock);
+        this.settleTrunkLockByCarLock(state.locked);
         this.publishCard();
         break;
       case 'odometer':
@@ -1877,6 +1892,9 @@ struct Index {
     } else if (state.tailgate === '已关闭') {
       this.trunkPhase = TogglePhase.OFF;
     }
+    // 快照里的尾门状态同样要收掉执行动效。
+    this.settleTrunkState(state.tailgate, state.tailgateLock);
+    this.settleTrunkLockByCarLock(state.locked);
     this.hoodOpen = state.hoodState === 1 || state.hoodState === 3;
     this.portOpen = state.chargePortState === 1 || state.chargePortState === 3;
 
@@ -3518,6 +3536,89 @@ struct Index {
   }
 
   /**
+   * 尾门状态确定后，落定相位并停掉执行动效。
+   *
+   * 车端给出的尾门状态就是最终结论：不管动效是车模上的旋转指示器
+   * （trunkBusy）还是开关行里的转圈（phase = PENDING），都该立刻收掉。
+   * 不收的话，按钮要一直转到 12 秒确认预算耗尽才停 ——
+   * 表现就是「状态已经变了，转圈还在转」。
+   *
+   * 只认**与目标方向一致**的状态：车端在指令生效前还会推旧值，
+   * 拿旧值落定会把按钮弹回错误的一侧。
+   *
+   * 四门状态不在这里等：尾门开合与车门开闭是两件独立的事，
+   * 车端不会保证两者同时落地，等四门会让尾门的动效多挂好几秒。
+   *
+   * @param tailgate     车端尾门开合状态
+   * @param tailgateLock 车端尾门锁状态
+   */
+  private settleTrunkState(tailgate: string, tailgateLock: string): void {
+    // 车模上的旋转指示器：车端尾门锁状态与目标一致就收掉。
+    // 状态还没到就继续转 —— 指令发出不等于车端已执行完。
+    if (this.trunkBusy) {
+      const reached: boolean = tailgateLock === '未锁'
+        ? this.trunkBusyTargetUnlocked
+        : (tailgateLock === '已锁' ? !this.trunkBusyTargetUnlocked : false);
+      if (reached) {
+        Log.info('尾门锁状态已确认，停掉车模指示器');
+        this.trunkBusy = false;
+      }
+    }
+
+    if (this.trunkPhase === TogglePhase.PENDING &&
+      this.pendingConfirmKind === ToggleKind.TRUNK) {
+      const actual: TogglePhase | undefined =
+        tailgate === '已打开' ? TogglePhase.ON :
+          (tailgate === '已关闭' ? TogglePhase.OFF : undefined);
+      if (actual !== undefined && actual === this.pendingConfirmTarget) {
+        Log.info(`尾门状态已确认：${tailgate}，停掉执行动效`);
+        this.trunkPhase = actual;
+        this.pendingConfirmKind = undefined;
+      }
+    }
+
+    if (this.trunkLockPhase === TogglePhase.PENDING &&
+      this.pendingConfirmKind === ToggleKind.TRUNK_LOCK) {
+      const actual: TogglePhase | undefined =
+        tailgateLock === '未锁' ? TogglePhase.ON :
+          (tailgateLock === '已锁' ? TogglePhase.OFF : undefined);
+      if (actual !== undefined && actual === this.pendingConfirmTarget) {
+        Log.info(`尾门锁状态已确认：${tailgateLock}，停掉执行动效`);
+        this.trunkLockPhase = actual;
+        this.pendingConfirmKind = undefined;
+      }
+    }
+  }
+
+  /**
+   * 整车锁已锁时，尾门锁一并落定。
+   *
+   * 尾门上锁实际下发的是整车锁指令（Lock RPC），车端只承诺整车锁上；
+   * 尾门锁字段（field 16）不一定同步更新 —— 不跟着落定的话，
+   * 开关行会一直转到 12 秒预算耗尽才停。
+   *
+   * 只在「锁」方向生效：解锁走的是 TRUNK_ONLY，整车仍是锁着的，
+   * 不能拿整车锁状态去判尾门锁。
+   *
+   * @param locked 车端整车锁状态
+   */
+  private settleTrunkLockByCarLock(locked: string): void {
+    if (locked !== '已锁') {
+      return;
+    }
+    if (this.trunkLockPhase !== TogglePhase.PENDING) {
+      return;
+    }
+    if (this.pendingConfirmKind !== ToggleKind.TRUNK_LOCK ||
+      this.pendingConfirmTarget !== TogglePhase.OFF) {
+      return;
+    }
+    Log.info('整车锁已锁，尾门锁一并落定');
+    this.trunkLockPhase = TogglePhase.OFF;
+    this.pendingConfirmKind = undefined;
+  }
+
+  /**
    * 指令生效后的落定处理。
    *
    * 除了写相位，还要把相关联的展示补齐 ——
@@ -3607,6 +3708,9 @@ struct Index {
       }
       this.windowStates = state.windowStates;
       this.doorStates = state.doorStates;
+      // 状态已确认 —— 执行动效到此收掉。
+      this.settleTrunkState(state.tailgate, state.tailgateLock);
+      this.settleTrunkLockByCarLock(state.locked);
       // 尾门状态变了，桌面卡片上的锁车文案也要跟着更新
       this.publishCard();
     } catch (err) {
@@ -3672,6 +3776,9 @@ struct Index {
     // 车窗开合后逐扇状态会变，同步到车模
     this.windowStates = state.windowStates;
     this.doorStates = state.doorStates;
+    // 轮询读到的是车端当前真值 —— 尾门状态已定，执行动效立刻收掉。
+    this.settleTrunkState(state.tailgate, state.tailgateLock);
+    this.settleTrunkLockByCarLock(state.locked);
     if (kind === ToggleKind.LOCK) {
       if (state.locked === '未锁') {
         return TogglePhase.ON;
@@ -3695,6 +3802,11 @@ struct Index {
         return TogglePhase.ON;
       }
       if (state.tailgateLock === '已锁') {
+        return TogglePhase.OFF;
+      }
+      // 尾门锁字段没跟上，但整车已锁 —— 尾门上锁本来就是整车锁，
+      // 整车锁成功即视为尾门锁成功。
+      if (state.locked === '已锁' && this.pendingConfirmTarget === TogglePhase.OFF) {
         return TogglePhase.OFF;
       }
       return undefined;
@@ -3816,12 +3928,15 @@ struct Index {
       return;
     }
     this.trunkBusy = true;
+    // 指令返回只说明「发出去了」，车端可能还没执行完。
+    // 车模上的旋转指示器要留到车端状态到达才收 —— 否则用户点了没反馈。
+    this.trunkBusyTargetUnlocked = !wasUnlocked;
 
     try {
       const coordinator = new ControlCoordinator(ctx, session, client);
       await coordinator.execute(this.vin, action, (success: boolean, message: string) => {
-        this.trunkBusy = false;
         if (!success) {
+          this.trunkBusy = false;
           this.trunkUnlocked = wasUnlocked;
           Log.warn(`尾门控制失败：${message}`);
           return;
