@@ -51,6 +51,16 @@ export struct Control {
   @Prop chargeTimerStopMinutes: number = -1;
   /** 充电配置保存中。 */
   @Prop chargeSaving: boolean = false;
+  /** 车端已生效的充电上限（百分比），-1 表示未知。 */
+  @Prop savedChargeTargetSoc: number = -1;
+  /** 车端已生效的电流上限（安培），-1 表示未知。 */
+  @Prop savedChargeAmpLimit: number = -1;
+  /** 车端已生效的预约充电开关。 */
+  @Prop savedChargeTimerActivated: boolean = false;
+  /** 车端已生效的预约开始时刻（分钟数），-1 表示未设置。 */
+  @Prop savedChargeTimerStartMinutes: number = -1;
+  /** 车端已生效的预约结束时刻（分钟数），-1 表示未设置。 */
+  @Prop savedChargeTimerStopMinutes: number = -1;
 
   /** 整车锁阶段（ON = 未锁）。 */
   @Prop lockPhase: TogglePhase = TogglePhase.OFF;
@@ -151,6 +161,11 @@ export struct Control {
           timerStartMinutes: this.chargeTimerStartMinutes,
           timerStopMinutes: this.chargeTimerStopMinutes,
           saving: this.chargeSaving,
+          savedTargetSoc: this.savedChargeTargetSoc,
+          savedAmpLimit: this.savedChargeAmpLimit,
+          savedTimerActivated: this.savedChargeTimerActivated,
+          savedTimerStartMinutes: this.savedChargeTimerStartMinutes,
+          savedTimerStopMinutes: this.savedChargeTimerStopMinutes,
           onTargetSocChange: (percent: number) => {
             if (this.onChargeTargetSocChange !== undefined) {
               this.onChargeTargetSocChange(percent);

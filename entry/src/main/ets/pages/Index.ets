@@ -3179,9 +3179,13 @@ struct Index {
    * 三个 chronos 服务（TargetSoc / AmpLimit / GlobalChargeTimer）
    * 不在状态域里，得单独读。读失败不抛 —— 卡片上对应位置显示「—」。
    *
-   * @param vin 车辆 VIN
+   * @param vin       车辆 VIN
+   * @param syncDraft 是否把编辑态同步成读回来的值。
+   *                   页面刷新时同步（用户还没开始改）；
+   *                   保存后回读时不同步 —— 车端可能还没生效，
+   *                   同步会把用户刚填的值冲掉。
    */
-  private async loadChargeConfig(vin: string): Promise<void> {
+  private async loadChargeConfig(vin: string, syncDraft: boolean = true): Promise<void> {
     const repository = this.repository;
     if (repository === undefined || vin.length === 0) {
       return;
@@ -3193,12 +3197,13 @@ struct Index {
       this.chargeTimerActivated = state.chargeTimerActivated;
       this.chargeTimerStartMinutes = state.chargeTimerStartMinutes;
       this.chargeTimerStopMinutes = state.chargeTimerStopMinutes;
-      // 编辑态同步成已生效值
-      this.draftChargeSoc = state.targetSoc;
-      this.draftChargeAmp = state.ampLimit;
-      this.draftChargeTimerOn = state.chargeTimerActivated;
-      this.draftChargeStartMinutes = state.chargeTimerStartMinutes;
-      this.draftChargeStopMinutes = state.chargeTimerStopMinutes;
+      if (syncDraft) {
+        this.draftChargeSoc = state.targetSoc;
+        this.draftChargeAmp = state.ampLimit;
+        this.draftChargeTimerOn = state.chargeTimerActivated;
+        this.draftChargeStartMinutes = state.chargeTimerStartMinutes;
+        this.draftChargeStopMinutes = state.chargeTimerStopMinutes;
+      }
     } catch (err) {
       Log.warn(`读取充电配置失败: ${(err as Error).message}`);
     }
@@ -3298,6 +3303,11 @@ struct Index {
 
     if (failures.length === 0) {
       this.toast(saved > 0 ? '充电配置已保存' : '没有需要保存的修改');
+      // 指令发出不等于车端已生效 —— 重新读一次，以车端实际状态为准。
+      // 不同步编辑态：车端可能还没生效，同步会把用户刚填的值冲掉。
+      if (saved > 0) {
+        await this.loadChargeConfig(vin, false);
+      }
       return;
     }
     this.toast(failures.join('；'));
@@ -4605,6 +4615,12 @@ struct Index {
           chargeTimerStartMinutes: this.draftChargeStartMinutes,
           chargeTimerStopMinutes: this.draftChargeStopMinutes,
           chargeSaving: this.chargeSaving,
+          // 已生效值：用来判断编辑值与车端是否一致，决定保存按钮是否可用
+          savedChargeTargetSoc: this.chargeTargetSoc,
+          savedChargeAmpLimit: this.chargeAmpLimit,
+          savedChargeTimerActivated: this.chargeTimerActivated,
+          savedChargeTimerStartMinutes: this.chargeTimerStartMinutes,
+          savedChargeTimerStopMinutes: this.chargeTimerStopMinutes,
           onChargeTargetSocChange: (percent: number) => {
             this.changeChargeTargetSoc(percent);
           },

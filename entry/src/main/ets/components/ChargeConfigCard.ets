@@ -36,6 +36,22 @@ export struct ChargeConfigCard {
   /** 保存中（按钮禁用）。 */
   @Prop saving: boolean = false;
 
+  /**
+   * 车端**已生效**的充电上限（百分比），-1 表示未知。
+   *
+   * 与上面那组编辑值一起才能判断「有没有改动」——
+   * 两者一致说明当前配置与车端一致，没有需要保存的内容。
+   */
+  @Prop savedTargetSoc: number = -1;
+  /** 车端已生效的电流上限（安培），-1 表示未知。 */
+  @Prop savedAmpLimit: number = -1;
+  /** 车端已生效的预约充电开关。 */
+  @Prop savedTimerActivated: boolean = false;
+  /** 车端已生效的预约开始时刻（分钟数），-1 表示未设置。 */
+  @Prop savedTimerStartMinutes: number = -1;
+  /** 车端已生效的预约结束时刻（分钟数），-1 表示未设置。 */
+  @Prop savedTimerStopMinutes: number = -1;
+
   /** 修改充电上限。 */
   onTargetSocChange?: (percent: number) => void;
   /** 修改电流上限。 */
@@ -160,14 +176,31 @@ export struct ChargeConfigCard {
   }
 
   /**
-   * 是否跨天（结束时刻早于开始时刻）。
+   * 当前编辑值与车端已生效值是否有差异。
    *
-   * 跨天不需要特殊编码 —— 车端按 start / stop 两个独立时刻自己判断，
-   * start > stop 即视为次日结束。这里只是把「次日」标出来给用户看。
+   * 一致时「保存配置」置灰 —— 没有需要保存的内容，按钮可点只会让用户
+   * 白等一次网络往返。
+   *
+   * 只比较**车端已读到的项**：某个值车端还没读到（-1）时无法判断，
+   * 保守地认为它可能有改动，让按钮保持可用。
    */
-  private crossDay(): boolean {
-    return this.timerStartMinutes >= 0 && this.timerStopMinutes >= 0 &&
-      this.timerStopMinutes < this.timerStartMinutes;
+  private dirty(): boolean {
+    if (this.savedTargetSoc >= 0 && this.targetSoc !== this.savedTargetSoc) {
+      return true;
+    }
+    if (this.savedAmpLimit >= 0 && this.ampLimit !== this.savedAmpLimit) {
+      return true;
+    }
+    if (this.timerActivated !== this.savedTimerActivated) {
+      return true;
+    }
+    if (this.savedTimerStartMinutes >= 0 && this.timerStartMinutes !== this.savedTimerStartMinutes) {
+      return true;
+    }
+    if (this.savedTimerStopMinutes >= 0 && this.timerStopMinutes !== this.savedTimerStopMinutes) {
+      return true;
+    }
+    return false;
   }
 
   build() {
@@ -344,28 +377,16 @@ export struct ChargeConfigCard {
       .padding({ top: 11, bottom: 11 })
       .border({ width: { top: 1 }, color: $r('app.color.app_rule') })
 
-      // 跨天标记单独一行 —— 挤在时刻块后面会把整行撑开，
-      // 也容易被误读成是结束时刻的一部分。
-      if (this.crossDay()) {
-        Row() {
-          Text('次日结束')
-            .fontSize(11)
-            .fontColor($r('app.color.app_tertiary_text'))
-        }
-        .width('100%')
-        .justifyContent(FlexAlign.End)
-        .padding({ bottom: 11 })
-      }
-
       // ---------- 保存配置 ----------
+      // 与车端一致时置灰 —— 没有需要保存的内容。
       Button('保存配置', { type: ButtonType.Normal })
         .width('100%')
         .height(42)
         .fontSize(13.5)
-        .fontColor($r('app.color.app_on_accent'))
-        .backgroundColor($r('app.color.app_accent'))
+        .fontColor(this.dirty() ? $r('app.color.app_on_accent') : $r('app.color.app_tertiary_text'))
+        .backgroundColor(this.dirty() ? $r('app.color.app_accent') : $r('app.color.app_surface_sunken'))
         .borderRadius(6)
-        .enabled(!this.saving)
+        .enabled(!this.saving && this.dirty())
         .margin({ top: 14 })
         .onClick(() => {
           if (this.onSave !== undefined) {
