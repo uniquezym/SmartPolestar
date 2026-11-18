@@ -177,16 +177,52 @@ struct Index {
   private static readonly CAMP_CLIMATE_RETRY_DELAY_MS: number = 60000;
 
   /**
-   * 露营模式空调守护的检查周期（毫秒）。
+   * 露营守候窗口的开启提前量（毫秒）。
    *
-   * 守护要回答一个问题：「露营还没到期，但驻车空调是不是已经停了？」
-   * 停了就把空调重新拉起来。
+   * 守候窗口 = 「预计空调停机时刻」往前推这么多。
    *
-   * 周期取 60 秒：车端驻车空调单次跑 30 分钟，停机到续开之间差一分钟
-   * 用户无感；但页面隐藏时状态流会断，守护是那时唯一的发现手段，
-   * 周期太长会让空调空窗过久。
+   * 车端驻车空调单次最长跑 30 分钟。空调开启后这段时间内它一定还开着，
+   * 提前去查都是白查 —— 所以正常期完全不发请求，
+   * 只在快到停机时刻时进入守候窗口，每 60 秒读一次车端真实状态。
+   *
+   * 提前 5 分钟开窗：车端停机时刻是推算出来的（车端给的剩余分钟数
+   * 有误差），早一点进窗口能兜住误差。
    */
-  private static readonly CAMP_GUARD_INTERVAL_MS: number = 60000;
+  private static readonly CAMP_WATCH_LEAD_MS: number = 5 * 60 * 1000;
+
+  /**
+   * 露营守候窗口内的检查间隔（毫秒）。
+   *
+   * 与原版 Android 的 CampModeWorker 对齐（60 秒读一次车端状态）。
+   * 窗口内空调随时可能停，60 秒是发现延迟的上限。
+   */
+  private static readonly CAMP_WATCH_INTERVAL_MS: number = 60000;
+
+  /**
+   * 拿不到预计结束时刻时的守候间隔（毫秒）。
+   *
+   * 车端没给剩余运行时长（老车 / 协议未返回）时推不出停机时刻，
+   * 只能退到固定间隔守着。取 5 分钟 —— 车端单次上限是 30 分钟，
+   * 5 分钟的发现延迟在露营场景里可以接受。
+   */
+  private static readonly CAMP_WATCH_FALLBACK_INTERVAL_MS: number = 5 * 60 * 1000;
+
+  /**
+   * 锚点未知时的引导延迟（毫秒）。
+   *
+   * 刚开启露营时车端还没给过剩余时长，本地推不出停机时刻。
+   * 先等 3 秒读一次车端状态，拿到剩余时长就能算出精确的窗口开启时刻。
+   */
+  private static readonly CAMP_WATCH_BOOTSTRAP_MS: number = 3000;
+
+  /**
+   * 续开空调后的稳定等待（毫秒）。
+   *
+   * 续开指令下发后，车端要过一会儿才把新的剩余时长报上来。
+   * 这段时间内读到的还是续开前的旧值（甚至是 0），
+   * 拿去排窗口会把窗口排到错误的位置。
+   */
+  private static readonly CAMP_CLIMATE_SETTLE_MS: number = 15000;
 
   /** 正在拉取车辆状态。顶栏右上角显示刷新动效。 */
   @State loading: boolean = false;
@@ -412,12 +448,11 @@ struct Index {
    */
   private campRestartTimer: number = -1;
   /**
-   * 露营模式的空调守护定时器句柄。
+   * 露营守候窗口的定时器句柄。
    *
-   * 周期性检查「露营还在跑但驻车空调已经停了」，停了就把空调重新拉起来。
-   * 这是后台场景下的兜底 —— 页面隐藏后状态流会断，只有这个守护还能工作。
+   * 只在「快到空调预计停机时刻」时才存在；正常期不占定时器、也不发请求。
    */
-  private campGuardTimer: number = -1;
+  private campWatchTimer: number = -1;
   /**
    * 本次露营周期内已续开过多少次驻车空调。
    */
@@ -436,16 +471,9 @@ struct Index {
    */
   private campRestarting: boolean = false;
   /**
-   * 上一次成功续开驻车空调的时刻（epoch millis），0 表示从未续开过。
-   *
-   * 用来给续开设一个最小间隔 —— 续开后车端还会推几帧旧的「已关闭」，
-   * 没有这道闸就会在这些旧帧上反复排续开，白白下发指令。
-   */
-  private campLastRestartAt: number = 0;
-  /**
    * 用户是否正在主动关闭露营模式 / 驻车空调。
    *
-   * 这种「停」是用户的意思，不能被守护逻辑当成车端到时停机而重新拉起来。
+   * 这种「停」是用户的意思，不能被守候逻辑当成车端到时停机而重新拉起来。
    */
   private campUserStopping: boolean = false;
 
@@ -531,7 +559,7 @@ struct Index {
     // 页面销毁 → 露营守护一并停掉。
     // 注意 onPageHide 不停它 —— 退到后台时状态流会断，
     // 守护是那时唯一能发现「空调停了」的手段。
-    this.stopCampGuard();
+    this.stopCampWatch();
   }
 
   /**
@@ -816,6 +844,10 @@ struct Index {
         }
         this.climateRemainingMinutes = climateState.climateRuntimeMinutes ?? -1;
         this.climate = climateState.climate;
+        // 轮询拿到的剩余时长同样会改变停机时刻 —— 守候窗口跟着挪。
+        if (this.campNeedsWatch() && climateState.climateRuntimeMinutes !== undefined) {
+          this.rearmCampWatch();
+        }
       }
       if (this.airPhase === TogglePhase.ON) {
         const airState = await this.repository.readDomain('air', this.vin);
@@ -1406,6 +1438,10 @@ struct Index {
         this.climate = state.climate;
         this.climateRemainingMinutes = state.climateRuntimeMinutes ?? -1;
         this.applyStreamPhase(ToggleKind.CLIMATE, state.climate, '开启', '关闭');
+        // 车端给了新的剩余时长 → 停机时刻变了，守候窗口要按新的时刻重排。
+        if (this.campNeedsWatch() && state.climateRuntimeMinutes !== undefined) {
+          this.rearmCampWatch();
+        }
         // 露营模式是靠驻车空调支撑的。空调被关掉有两种情况：
         //   - 用户主动关（概览页快捷键 / 控制页露营卡片）→ 露营结束
         //   - 车端到时停机（单次跑满 30 分钟）→ 露营还没到期，续开空调
@@ -1807,6 +1843,10 @@ struct Index {
       this.pm25UgM3 = state.pm25UgM3;
     }
     this.syncClimateTimer();
+    // 快照里的剩余时长也会改变停机时刻 —— 守候窗口跟着挪。
+    if (this.campNeedsWatch() && state.climateRuntimeMinutes !== undefined) {
+      this.rearmCampWatch();
+    }
 
     // 健康告警：状态行最高优先级。
     this.healthWarnings = state.healthWarnings.slice();
@@ -2444,7 +2484,7 @@ struct Index {
       // 应用重启后露营还没到期 —— 守护要重新起来，
       // 否则空调在这次运行里到时停机后就没人拉起来了。
       this.campUserStopping = false;
-      this.startCampGuard();
+      this.startCampWatch();
     }
   }
 
@@ -2460,15 +2500,15 @@ struct Index {
     this.campRemainingRatio = controller.remainingRatio();
   }
 
-  // ---------- 露营模式的驻车空调守护 ----------
+  // ---------- 露营模式的驻车空调守候 ----------
 
   /**
-   * 露营模式是否处于「需要守护驻车空调」的状态。
+   * 露营模式是否处于「需要守候驻车空调」的状态。
    *
    * 三个条件都要满足：露营模式开着、露营还没到期、
    * 且不是用户主动要停（主动关空调等于结束露营）。
    */
-  private campNeedsGuard(): boolean {
+  private campNeedsWatch(): boolean {
     if (this.campPhase !== TogglePhase.ON && this.campPhase !== TogglePhase.PENDING) {
       return false;
     }
@@ -2483,34 +2523,94 @@ struct Index {
   }
 
   /**
-   * 启动露营模式的空调守护定时器。
+   * 安排露营守候窗口。
    *
-   * 守护周期性地检查：露营还没到期，但驻车空调已经停了 —— 那就把空调重新拉起来。
+   * 守候窗口 = 「预计空调停机时刻」往前推 CAMP_WATCH_LEAD_MS。
    *
-   * 为什么需要它：车端驻车空调单次最长跑 30 分钟，而露营模式可以设到 8 小时。
-   * 空调到时停机后，必须有人负责把它重新拉起，直到露营到期。
+   * 车端驻车空调单次最长跑 30 分钟 —— 这段时间里它一定还开着，
+   * 提前去查都是白查。所以正常期完全不占用定时器、也不发任何请求；
+   * 只在快到停机时刻时才进入窗口，每 60 秒读一次车端真实状态。
    *
-   * 页面可见时，状态流推送能第一时间发现空调停了；页面隐藏后流会断，
-   * 守护就是唯一的发现手段 —— 所以它不能跟着页面一起停。
+   * 这比固定周期轮询省得多：8 小时露营大约只查 60 次，
+   * 而 60 秒固定轮询要查 480 次。
    */
-  private startCampGuard(): void {
-    if (this.campGuardTimer !== -1) {
+  private startCampWatch(settleMs: number = 0): void {
+    this.stopCampWatch();
+    if (!this.campNeedsWatch()) {
       return;
     }
-    this.campGuardTimer = setInterval(() => {
-      this.checkCampClimate();
-    }, Index.CAMP_GUARD_INTERVAL_MS);
-    Log.info('启动露营模式空调守护');
+    const now = Date.now();
+    const expectedEnd = this.climateExpectedEnd;
+    let delay: number = Index.CAMP_WATCH_BOOTSTRAP_MS;
+    if (settleMs > 0) {
+      // 刚续开过 —— 等车端把新的剩余时长报上来再排窗口，
+      // 否则会读到续开前的旧剩余时长，把窗口排错位置。
+      delay = settleMs;
+    } else if (expectedEnd > 0) {
+      // 锚点已知 —— 直接算出窗口开启时刻。
+      delay = expectedEnd - Index.CAMP_WATCH_LEAD_MS - now;
+      if (delay < 0) {
+        // 已经进窗口了 —— 空调可能正在停，立刻查一次。
+        delay = 0;
+      }
+    }
+    // 锚点未知时用很短的引导延迟 —— 先读一次车端状态拿到剩余时长，
+    // 之后就能算出精确的停机时刻。
+    this.scheduleCampWatchTick(delay);
+    Log.info(`露营守候窗口已安排，${Math.round(delay / 1000)} 秒后开始`);
   }
 
   /**
-   * 停止露营模式的空调守护定时器。
+   * 排下一次守候检查。
+   *
+   * @param delay 多少毫秒后检查
    */
-  private stopCampGuard(): void {
-    if (this.campGuardTimer !== -1) {
-      clearInterval(this.campGuardTimer);
-      this.campGuardTimer = -1;
-      Log.info('停止露营模式空调守护');
+  private scheduleCampWatchTick(delay: number): void {
+    if (this.campWatchTimer !== -1) {
+      clearTimeout(this.campWatchTimer);
+      this.campWatchTimer = -1;
+    }
+    this.campWatchTimer = setTimeout(() => {
+      this.campWatchTimer = -1;
+      this.onCampWatchTick();
+    }, delay);
+  }
+
+  /**
+   * 按最新的空调剩余时长重排守候窗口。
+   *
+   * 车端每次给出新的剩余分钟数，停机时刻就变了 ——
+   * 守候窗口要跟着挪，否则会守着旧时刻白等。
+   *
+   * 只在「还没进窗口」时重排。已经在窗口里了（每 60 秒轮询中）
+   * 就不用动 —— 那条链路自己会按新的剩余时长继续。
+   */
+  private rearmCampWatch(): void {
+    if (!this.campNeedsWatch()) {
+      return;
+    }
+    const remaining = this.climateRemainingMinutes;
+    if (remaining < 0) {
+      return;
+    }
+    const stopAt = Date.now() + remaining * 60000;
+    const wait = stopAt - Index.CAMP_WATCH_LEAD_MS - Date.now();
+    if (wait <= 0) {
+      // 已经在窗口里了 —— 让现有的轮询链路继续，不重排。
+      return;
+    }
+    this.scheduleCampWatchTick(wait);
+    Log.info(`露营守候窗口按新的剩余时长重排，${Math.round(wait / 1000)} 秒后开始`);
+  }
+
+  /**
+   * 停止守候窗口与续开定时器。
+   */
+  private stopCampWatch(): void {
+    if (this.campWatchTimer !== -1) {
+      clearTimeout(this.campWatchTimer);
+      this.campWatchTimer = -1;
+      Log.info('露营守候窗口已停止');
     }
     if (this.campRestartTimer !== -1) {
       clearTimeout(this.campRestartTimer);
@@ -2519,13 +2619,20 @@ struct Index {
   }
 
   /**
-   * 守护检查：露营还没到期，但驻车空调停了 → 重新拉起来。
+   * 守候窗口的一次检查。
    *
-   * 这里主动读一次 climate 域，不依赖推送 ——
-   * 页面隐藏时状态流是断的，守护必须能自己发现问题。
+   * 读一次车端真实状态：
+   *   - 空调已停 → 安排续开
+   *   - 空调还开着 → 按车端给的剩余时长算出下一次停机时刻，
+   *     还远就退出窗口静默等待，快到了就继续每 60 秒轮询
+   *
+   * 车端给的「剩余分钟数」是最准的停机依据 —— 比本地锚点可靠
+   * （锚点是推算出来的，车端剩余值取整会有误差）。
+   *
+   * 读不到状态不能当作「空调停了」—— 不能据此就重发指令。
    */
-  private async checkCampClimate(): Promise<void> {
-    if (!this.campNeedsGuard() || this.campRestarting) {
+  private async onCampWatchTick(): Promise<void> {
+    if (!this.campNeedsWatch() || this.campRestarting) {
       return;
     }
     const repository = this.repository;
@@ -2535,11 +2642,33 @@ struct Index {
     try {
       const state = await repository.readDomain('climate', this.vin);
       if (state.climate === '关闭') {
-        this.scheduleCampClimateRestart('守护检查发现空调已停');
+        this.scheduleCampClimateRestart('守候窗口发现空调已停');
+        return;
+      }
+      // 空调还开着 —— 车端给了新的运行窗口。
+      const remaining = state.climateRuntimeMinutes;
+      if (remaining === undefined) {
+        // 拿不到剩余时长 —— 不知道什么时候停，只能按固定间隔守着。
+        this.scheduleCampWatchTick(Index.CAMP_WATCH_FALLBACK_INTERVAL_MS);
+        return;
+      }
+      this.climateRemainingMinutes = remaining;
+      this.syncCountdownAnchors();
+      // 停机时刻 = 现在 + 车端给的剩余时长。
+      const stopAt = Date.now() + remaining * 60000;
+      const openAt = stopAt - Index.CAMP_WATCH_LEAD_MS;
+      const wait = openAt - Date.now();
+      if (wait > 0) {
+        // 停机点还远 —— 退出窗口，静默等待。
+        this.scheduleCampWatchTick(wait);
+      } else {
+        // 已在窗口内 —— 空调随时可能停，继续每 60 秒读一次。
+        this.scheduleCampWatchTick(Index.CAMP_WATCH_INTERVAL_MS);
       }
     } catch (err) {
-      // 读不到状态不等于空调停了 —— 不能据此就重发指令。
-      Log.warn(`露营守护检查失败: ${(err as Error).message}`);
+      Log.warn(`露营守候检查失败: ${(err as Error).message}`);
+      // 读失败也继续守 —— 下一次再试。
+      this.scheduleCampWatchTick(Index.CAMP_WATCH_INTERVAL_MS);
     }
   }
 
@@ -2552,17 +2681,11 @@ struct Index {
    * @param reason 日志里的原因说明
    */
   private scheduleCampClimateRestart(reason: string): void {
-    if (!this.campNeedsGuard() || this.campRestarting) {
+    if (!this.campNeedsWatch() || this.campRestarting) {
       return;
     }
     if (this.campRestartTimer !== -1) {
       // 已经排过了，不重复排。
-      return;
-    }
-    // 刚续开过就不再排 —— 车端在续开后还会推几帧旧的「已关闭」，
-    // 没有这道闸就会在这些旧帧上反复排续开。
-    if (this.campLastRestartAt > 0 &&
-      Date.now() - this.campLastRestartAt < Index.CAMP_CLIMATE_RESTART_DELAY_MS) {
       return;
     }
     if (this.campRestartCount >= Index.CAMP_CLIMATE_MAX_RESTARTS) {
@@ -2578,13 +2701,13 @@ struct Index {
   }
 
   /**
-   * 重新拉起驻车空调（露营模式守护）。
+   * 重新拉起驻车空调（露营守候）。
    *
-   * 成功后把空调相位落回「开启」，并把露营的守护计数重置 ——
-   * 下一次 30 分钟到时还会再停，那时还要再续。
+   * 成功后把空调相位落回「开启」—— 下一次 30 分钟到时还会再停，
+   * 那时守候窗口会再次发现并续开。
    */
   private async restartCampClimate(): Promise<void> {
-    if (!this.campNeedsGuard() || this.campRestarting) {
+    if (!this.campNeedsWatch() || this.campRestarting) {
       return;
     }
     const repository = this.repository;
@@ -2610,10 +2733,13 @@ struct Index {
       }
       this.campRestartCount++;
       this.campRestartFailCount = 0;
-      this.campLastRestartAt = Date.now();
       this.climatePhase = TogglePhase.ON;
       this.climateClosing = false;
       Log.info(`露营模式：驻车空调已续开（第 ${this.campRestartCount} 次）`);
+      // 续开成功 → 车端又给了新的 30 分钟。
+      // 等一会儿让车端把新的剩余时长报上来，再排下一个守候窗口 ——
+      // 立刻排会读到续开前的旧剩余时长，把窗口排到错误的位置。
+      this.startCampWatch(Index.CAMP_CLIMATE_SETTLE_MS);
     } catch (err) {
       this.campRestartFailCount++;
       Log.warn(`露营模式续开异常: ${(err as Error).message}`);
@@ -2629,7 +2755,7 @@ struct Index {
    * 「露营模式已开启」但实际没空调的空壳，所以直接结束。
    */
   private async abortCamp(message: string): Promise<void> {
-    this.stopCampGuard();
+    this.stopCampWatch();
     const controller = this.campController;
     if (controller !== undefined) {
       await controller.stop();
@@ -2704,7 +2830,7 @@ struct Index {
       // 用户主动关 —— 守护逻辑不能把这个「停」当成车端到时停机再拉起来。
       this.campUserStopping = true;
       // 守护同时停掉，别让它在关闭过程中又把空调拉起来。
-      this.stopCampGuard();
+      this.stopCampWatch();
       // **先挂起推送确认，再下发指令**。
       //
       // 车端的「已关闭」推送完全可能早于指令调用返回，
@@ -2724,7 +2850,7 @@ struct Index {
         this.climateClosing = false;
         // 下发失败，露营还在跑 —— 守护要恢复。
         this.campUserStopping = false;
-        this.startCampGuard();
+        this.startCampWatch();
         return;
       }
       // 等车端确认空调真的停了再收尾 —— 指令发出不代表空调已经停了。
@@ -2762,11 +2888,10 @@ struct Index {
     this.campUserStopping = false;
     this.campRestartCount = 0;
     this.campRestartFailCount = 0;
-    this.campLastRestartAt = 0;
     this.refreshCampRemaining();
-    // 驻车空调单次跑满 30 分钟就会停机，守护负责把它重新拉起来，
+    // 驻车空调单次跑满 30 分钟就会停机，守候窗口负责把它重新拉起来，
     // 直到露营到期。
-    this.startCampGuard();
+    this.startCampWatch();
     // 退到后台仍需到期自动关闭，申请长时任务
     await BackgroundKeeper.start(this.context as common.UIAbilityContext);
     this.toast('露营模式已开启');
@@ -2777,7 +2902,7 @@ struct Index {
    */
   private async onCampExpired(): Promise<void> {
     // 到期了 —— 守护必须停掉，不能再把空调拉起来。
-    this.stopCampGuard();
+    this.stopCampWatch();
     this.campUserStopping = true;
     this.campPhase = TogglePhase.OFF;
     this.campRemainingMinutes = 0;
@@ -2805,7 +2930,7 @@ struct Index {
       return;
     }
     // 守护停掉 —— 用户主动关空调等于结束露营，不能再拉起来。
-    this.stopCampGuard();
+    this.stopCampWatch();
     this.campUserStopping = true;
     await controller.stop();
     this.campPhase = TogglePhase.OFF;
@@ -2920,7 +3045,7 @@ struct Index {
         // 当成「车端到时停机」而把空调重新拉起来。
         if (this.campPhase === TogglePhase.ON) {
           this.campUserStopping = true;
-          this.stopCampGuard();
+          this.stopCampWatch();
         }
       } else if (kind === ToggleKind.PURIFIER) {
         this.airClosing = true;
@@ -2978,7 +3103,7 @@ struct Index {
           // 关闭失败 → 露营还在跑，守护与标记都要恢复
           if (kind === ToggleKind.CLIMATE && this.campPhase === TogglePhase.ON) {
             this.campUserStopping = false;
-            this.startCampGuard();
+            this.startCampWatch();
           }
           this.toast(message.length > 0 ? message : `${this.toggleLabel(kind)}指令下发失败`);
           Log.warn(`车控执行失败：${message}`);
