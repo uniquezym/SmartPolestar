@@ -150,6 +150,44 @@ struct Index {
    */
   private static readonly CLIMATE_CHECK_ENDGAME_LIMIT: number = 8;
 
+  /**
+   * 露营模式续开驻车空调的等待量（毫秒）。
+   *
+   * 车端驻车空调单次最长跑 30 分钟就自动停机，而露营模式可以设到 8 小时。
+   * 停机不等于露营结束 —— 只要露营的到期时刻还没到，就要重新把空调拉起来。
+   *
+   * 等 30 秒再续开：车端停机后立刻重发 climate-start 有可能撞上
+   * 车端自己的收尾流程被拒，等它彻底停下来更稳。
+   */
+  private static readonly CAMP_CLIMATE_RESTART_DELAY_MS: number = 30000;
+
+  /**
+   * 露营模式续开失败后的重试上限。
+   *
+   * 连续失败这么多次就放弃续开，并把露营模式收尾 —— 不能无限重试，
+   * 那样会在车端拒绝指令时变成打接口的死循环。
+   */
+  private static readonly CAMP_CLIMATE_MAX_RESTARTS: number = 5;
+
+  /**
+   * 露营模式续开失败后的重试间隔（毫秒）。
+   *
+   * 失败要退避：刚被车端拒绝就立刻重发，多半还是被拒。
+   */
+  private static readonly CAMP_CLIMATE_RETRY_DELAY_MS: number = 60000;
+
+  /**
+   * 露营模式空调守护的检查周期（毫秒）。
+   *
+   * 守护要回答一个问题：「露营还没到期，但驻车空调是不是已经停了？」
+   * 停了就把空调重新拉起来。
+   *
+   * 周期取 60 秒：车端驻车空调单次跑 30 分钟，停机到续开之间差一分钟
+   * 用户无感；但页面隐藏时状态流会断，守护是那时唯一的发现手段，
+   * 周期太长会让空调空窗过久。
+   */
+  private static readonly CAMP_GUARD_INTERVAL_MS: number = 60000;
+
   /** 正在拉取车辆状态。顶栏右上角显示刷新动效。 */
   @State loading: boolean = false;
   /** 下拉刷新指示器状态。 */
@@ -366,6 +404,51 @@ struct Index {
    */
   private silentConfirmKind: ToggleKind | undefined = undefined;
 
+  /**
+   * 露营模式续开驻车空调的定时器句柄。
+   *
+   * 车端驻车空调单次最长 30 分钟，到时自动停机。露营模式时长可达 8 小时，
+   * 所以空调停机后必须重新拉起来，直到露营到期为止。
+   */
+  private campRestartTimer: number = -1;
+  /**
+   * 露营模式的空调守护定时器句柄。
+   *
+   * 周期性检查「露营还在跑但驻车空调已经停了」，停了就把空调重新拉起来。
+   * 这是后台场景下的兜底 —— 页面隐藏后状态流会断，只有这个守护还能工作。
+   */
+  private campGuardTimer: number = -1;
+  /**
+   * 本次露营周期内已续开过多少次驻车空调。
+   */
+  private campRestartCount: number = 0;
+  /**
+   * 连续续开失败次数。
+   *
+   * 失败也要计数 —— 连续失败到上限就放弃续开并收尾露营模式，
+   * 不能在车端拒绝指令时无限重试。
+   */
+  private campRestartFailCount: number = 0;
+  /**
+   * 续开请求是否已在途。
+   *
+   * 避免流式推送与轮询同时发现空调停了，各发一条 climate-start。
+   */
+  private campRestarting: boolean = false;
+  /**
+   * 上一次成功续开驻车空调的时刻（epoch millis），0 表示从未续开过。
+   *
+   * 用来给续开设一个最小间隔 —— 续开后车端还会推几帧旧的「已关闭」，
+   * 没有这道闸就会在这些旧帧上反复排续开，白白下发指令。
+   */
+  private campLastRestartAt: number = 0;
+  /**
+   * 用户是否正在主动关闭露营模式 / 驻车空调。
+   *
+   * 这种「停」是用户的意思，不能被守护逻辑当成车端到时停机而重新拉起来。
+   */
+  private campUserStopping: boolean = false;
+
   aboutToAppear(): void {
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     this.repository = new VehicleRepository(this.context);
@@ -445,6 +528,10 @@ struct Index {
     this.stopClimateTimer();
     this.stopLocationTimer();
     this.stopVehicleStream();
+    // 页面销毁 → 露营守护一并停掉。
+    // 注意 onPageHide 不停它 —— 退到后台时状态流会断，
+    // 守护是那时唯一能发现「空调停了」的手段。
+    this.stopCampGuard();
   }
 
   /**
@@ -722,6 +809,10 @@ struct Index {
         } else if (climateState.climate === '关闭') {
           this.climatePhase = TogglePhase.OFF;
           this.publishCard();
+          // 露营模式还在跑 → 车端到时停机了，续开空调
+          if (this.campPhase === TogglePhase.ON) {
+            this.scheduleCampClimateRestart('轮询发现空调已停');
+          }
         }
         this.climateRemainingMinutes = climateState.climateRuntimeMinutes ?? -1;
         this.climate = climateState.climate;
@@ -1315,11 +1406,12 @@ struct Index {
         this.climate = state.climate;
         this.climateRemainingMinutes = state.climateRuntimeMinutes ?? -1;
         this.applyStreamPhase(ToggleKind.CLIMATE, state.climate, '开启', '关闭');
-        // 露营模式是靠驻车空调支撑的。空调在车端被关掉（用户手动关、
-        // 或车端到时停机）后，露营模式的倒计时已经没有意义，
-        // 这里只清本地状态，不再下发关闭指令。
+        // 露营模式是靠驻车空调支撑的。空调被关掉有两种情况：
+        //   - 用户主动关（概览页快捷键 / 控制页露营卡片）→ 露营结束
+        //   - 车端到时停机（单次跑满 30 分钟）→ 露营还没到期，续开空调
+        // 这里只处理第二种 —— 第一种由 toggleCamp / dispatchToggle 主动收尾。
         if (this.campPhase === TogglePhase.ON && state.climate === '关闭') {
-          this.stopCampMode();
+          this.scheduleCampClimateRestart('收到空调关闭推送');
         }
         this.syncClimateTimer();
         this.publishCard();
@@ -1663,6 +1755,12 @@ struct Index {
       this.climatePhase = TogglePhase.ON;
     } else if (state.climate === '关闭') {
       this.climatePhase = TogglePhase.OFF;
+      // 露营模式在本地仍是「开启」（到期时刻还没到），但空调已经停了 ——
+      // 可能是上次运行期间车端到时停机，也可能是应用重启后读到的现状。
+      // 两种情况都要把空调续上。
+      if (this.campPhase === TogglePhase.ON) {
+        this.scheduleCampClimateRestart('快照读到空调已关闭');
+      }
     }
     if (state.air === '开启') {
       this.airPhase = TogglePhase.ON;
@@ -2343,6 +2441,10 @@ struct Index {
       this.campPhase = TogglePhase.ON;
       controller.resume();
       this.refreshCampRemaining();
+      // 应用重启后露营还没到期 —— 守护要重新起来，
+      // 否则空调在这次运行里到时停机后就没人拉起来了。
+      this.campUserStopping = false;
+      this.startCampGuard();
     }
   }
 
@@ -2358,24 +2460,213 @@ struct Index {
     this.campRemainingRatio = controller.remainingRatio();
   }
 
+  // ---------- 露营模式的驻车空调守护 ----------
+
+  /**
+   * 露营模式是否处于「需要守护驻车空调」的状态。
+   *
+   * 三个条件都要满足：露营模式开着、露营还没到期、
+   * 且不是用户主动要停（主动关空调等于结束露营）。
+   */
+  private campNeedsGuard(): boolean {
+    if (this.campPhase !== TogglePhase.ON && this.campPhase !== TogglePhase.PENDING) {
+      return false;
+    }
+    if (this.campUserStopping) {
+      return false;
+    }
+    const controller = this.campController;
+    if (controller === undefined || !controller.isActive()) {
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * 启动露营模式的空调守护定时器。
+   *
+   * 守护周期性地检查：露营还没到期，但驻车空调已经停了 —— 那就把空调重新拉起来。
+   *
+   * 为什么需要它：车端驻车空调单次最长跑 30 分钟，而露营模式可以设到 8 小时。
+   * 空调到时停机后，必须有人负责把它重新拉起，直到露营到期。
+   *
+   * 页面可见时，状态流推送能第一时间发现空调停了；页面隐藏后流会断，
+   * 守护就是唯一的发现手段 —— 所以它不能跟着页面一起停。
+   */
+  private startCampGuard(): void {
+    if (this.campGuardTimer !== -1) {
+      return;
+    }
+    this.campGuardTimer = setInterval(() => {
+      this.checkCampClimate();
+    }, Index.CAMP_GUARD_INTERVAL_MS);
+    Log.info('启动露营模式空调守护');
+  }
+
+  /**
+   * 停止露营模式的空调守护定时器。
+   */
+  private stopCampGuard(): void {
+    if (this.campGuardTimer !== -1) {
+      clearInterval(this.campGuardTimer);
+      this.campGuardTimer = -1;
+      Log.info('停止露营模式空调守护');
+    }
+    if (this.campRestartTimer !== -1) {
+      clearTimeout(this.campRestartTimer);
+      this.campRestartTimer = -1;
+    }
+  }
+
+  /**
+   * 守护检查：露营还没到期，但驻车空调停了 → 重新拉起来。
+   *
+   * 这里主动读一次 climate 域，不依赖推送 ——
+   * 页面隐藏时状态流是断的，守护必须能自己发现问题。
+   */
+  private async checkCampClimate(): Promise<void> {
+    if (!this.campNeedsGuard() || this.campRestarting) {
+      return;
+    }
+    const repository = this.repository;
+    if (repository === undefined || this.vin.length === 0) {
+      return;
+    }
+    try {
+      const state = await repository.readDomain('climate', this.vin);
+      if (state.climate === '关闭') {
+        this.scheduleCampClimateRestart('守护检查发现空调已停');
+      }
+    } catch (err) {
+      // 读不到状态不等于空调停了 —— 不能据此就重发指令。
+      Log.warn(`露营守护检查失败: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * 安排重新拉起驻车空调。
+   *
+   * 不立刻发 —— 车端刚停机就重发 climate-start，可能撞上它自己的收尾流程被拒。
+   * 等 30 秒，确认车端彻底停下来再发。
+   *
+   * @param reason 日志里的原因说明
+   */
+  private scheduleCampClimateRestart(reason: string): void {
+    if (!this.campNeedsGuard() || this.campRestarting) {
+      return;
+    }
+    if (this.campRestartTimer !== -1) {
+      // 已经排过了，不重复排。
+      return;
+    }
+    // 刚续开过就不再排 —— 车端在续开后还会推几帧旧的「已关闭」，
+    // 没有这道闸就会在这些旧帧上反复排续开。
+    if (this.campLastRestartAt > 0 &&
+      Date.now() - this.campLastRestartAt < Index.CAMP_CLIMATE_RESTART_DELAY_MS) {
+      return;
+    }
+    if (this.campRestartCount >= Index.CAMP_CLIMATE_MAX_RESTARTS) {
+      Log.warn('露营模式续开次数已达上限，放弃续开');
+      this.abortCamp('驻车空调无法重新启动，露营模式已结束');
+      return;
+    }
+    Log.info(`露营模式：安排续开驻车空调（${reason}）`);
+    this.campRestartTimer = setTimeout(() => {
+      this.campRestartTimer = -1;
+      this.restartCampClimate();
+    }, Index.CAMP_CLIMATE_RESTART_DELAY_MS);
+  }
+
+  /**
+   * 重新拉起驻车空调（露营模式守护）。
+   *
+   * 成功后把空调相位落回「开启」，并把露营的守护计数重置 ——
+   * 下一次 30 分钟到时还会再停，那时还要再续。
+   */
+  private async restartCampClimate(): Promise<void> {
+    if (!this.campNeedsGuard() || this.campRestarting) {
+      return;
+    }
+    const repository = this.repository;
+    if (repository === undefined || this.vin.length === 0) {
+      return;
+    }
+    this.campRestarting = true;
+    try {
+      const success = await this.executeAction(VehicleCommands.ACTION_CLIMATE_START, true);
+      if (!success) {
+        this.campRestartFailCount++;
+        if (this.campRestartFailCount >= Index.CAMP_CLIMATE_MAX_RESTARTS) {
+          this.abortCamp('驻车空调无法重新启动，露营模式已结束');
+          return;
+        }
+        Log.warn(`露营模式续开失败（第 ${this.campRestartFailCount} 次），稍后重试`);
+        // 退避后重试，不再等 30 秒那一档
+        this.campRestartTimer = setTimeout(() => {
+          this.campRestartTimer = -1;
+          this.restartCampClimate();
+        }, Index.CAMP_CLIMATE_RETRY_DELAY_MS);
+        return;
+      }
+      this.campRestartCount++;
+      this.campRestartFailCount = 0;
+      this.campLastRestartAt = Date.now();
+      this.climatePhase = TogglePhase.ON;
+      this.climateClosing = false;
+      Log.info(`露营模式：驻车空调已续开（第 ${this.campRestartCount} 次）`);
+    } catch (err) {
+      this.campRestartFailCount++;
+      Log.warn(`露营模式续开异常: ${(err as Error).message}`);
+    } finally {
+      this.campRestarting = false;
+    }
+  }
+
+  /**
+   * 续开失败到上限，放弃续开并收尾露营模式。
+   *
+   * 此时空调确实是停的，露营模式继续挂着只会让状态行显示一个
+   * 「露营模式已开启」但实际没空调的空壳，所以直接结束。
+   */
+  private async abortCamp(message: string): Promise<void> {
+    this.stopCampGuard();
+    const controller = this.campController;
+    if (controller !== undefined) {
+      await controller.stop();
+    }
+    this.campPhase = TogglePhase.OFF;
+    this.campRemainingMinutes = 0;
+    this.campRemainingRatio = 0;
+    this.campClosing = false;
+    this.climatePhase = TogglePhase.OFF;
+    this.climateClosing = false;
+    this.toast(message);
+  }
+
   /**
    * 下发一条车控指令。
    *
+   * @param action 动作标识
+   * @param silent 为 true 时失败不弹提示（自动续开等后台动作不该打扰用户）
    * @returns 是否下发成功
    */
-  private async executeAction(action: string): Promise<boolean> {
+  private async executeAction(action: string, silent: boolean = false): Promise<boolean> {
     const ctx = this.context;
     const client = this.repository?.getClient();
     const session = this.repository?.getSession();
     if (ctx === undefined || client === undefined || session === undefined) {
-      this.errorMessage = '会话未就绪，请重试';
+      if (!silent) {
+        this.errorMessage = '会话未就绪，请重试';
+      }
       return false;
     }
     return await new Promise<boolean>((resolve: (result: boolean) => void) => {
       const coordinator = new ControlCoordinator(ctx, session, client);
       coordinator.execute(this.vin, action, (success: boolean, message: string) => {
         if (!success) {
-          this.toast(message.length > 0 ? message : '指令下发失败');
+          if (!silent) {
+            this.toast(message.length > 0 ? message : '指令下发失败');
+          }
           resolve(false);
           return;
         }
@@ -2410,6 +2701,10 @@ struct Index {
       // 若不看这个标记，「露营模式已开启 · 剩余 X」会立刻消失。
       this.campClosing = true;
       this.climateClosing = true;
+      // 用户主动关 —— 守护逻辑不能把这个「停」当成车端到时停机再拉起来。
+      this.campUserStopping = true;
+      // 守护同时停掉，别让它在关闭过程中又把空调拉起来。
+      this.stopCampGuard();
       // **先挂起推送确认，再下发指令**。
       //
       // 车端的「已关闭」推送完全可能早于指令调用返回，
@@ -2427,6 +2722,9 @@ struct Index {
         this.climatePhase = TogglePhase.ON;
         this.campClosing = false;
         this.climateClosing = false;
+        // 下发失败，露营还在跑 —— 守护要恢复。
+        this.campUserStopping = false;
+        this.startCampGuard();
         return;
       }
       // 等车端确认空调真的停了再收尾 —— 指令发出不代表空调已经停了。
@@ -2460,7 +2758,15 @@ struct Index {
     await controller.start(this.campDurationMinutes);
     this.campPhase = TogglePhase.ON;
     this.climatePhase = TogglePhase.ON;
+    // 新一轮露营 —— 守护计数归零。
+    this.campUserStopping = false;
+    this.campRestartCount = 0;
+    this.campRestartFailCount = 0;
+    this.campLastRestartAt = 0;
     this.refreshCampRemaining();
+    // 驻车空调单次跑满 30 分钟就会停机，守护负责把它重新拉起来，
+    // 直到露营到期。
+    this.startCampGuard();
     // 退到后台仍需到期自动关闭，申请长时任务
     await BackgroundKeeper.start(this.context as common.UIAbilityContext);
     this.toast('露营模式已开启');
@@ -2470,6 +2776,9 @@ struct Index {
    * 露营模式到期：关闭驻车空调，净化若在跑则一并关闭。
    */
   private async onCampExpired(): Promise<void> {
+    // 到期了 —— 守护必须停掉，不能再把空调拉起来。
+    this.stopCampGuard();
+    this.campUserStopping = true;
     this.campPhase = TogglePhase.OFF;
     this.campRemainingMinutes = 0;
     this.campRemainingRatio = 0;
@@ -2488,13 +2797,16 @@ struct Index {
   /**
    * 结束露营模式（只清本地状态，不再下发指令）。
    *
-   * 用于「空调被别处关掉」的场景：指令已经下过了，这里只清理倒计时。
+   * 用于「用户主动关掉驻车空调」的场景：指令已经下过了，这里只清理倒计时。
    */
   private async stopCampMode(): Promise<void> {
     const controller = this.campController;
     if (controller === undefined) {
       return;
     }
+    // 守护停掉 —— 用户主动关空调等于结束露营，不能再拉起来。
+    this.stopCampGuard();
+    this.campUserStopping = true;
     await controller.stop();
     this.campPhase = TogglePhase.OFF;
     this.campRemainingMinutes = 0;
@@ -2602,6 +2914,14 @@ struct Index {
     if (target === TogglePhase.OFF) {
       if (kind === ToggleKind.CLIMATE) {
         this.climateClosing = true;
+        // 用户主动关驻车空调 —— 露营模式随之结束。
+        // 这个标记必须在指令下发**之前**挂上：车端的「已关闭」推送
+        // 可能早于指令调用返回，若那时还没标记，守护逻辑会把推送
+        // 当成「车端到时停机」而把空调重新拉起来。
+        if (this.campPhase === TogglePhase.ON) {
+          this.campUserStopping = true;
+          this.stopCampGuard();
+        }
       } else if (kind === ToggleKind.PURIFIER) {
         this.airClosing = true;
       }
@@ -2655,6 +2975,11 @@ struct Index {
           this.pendingConfirmKind = undefined;
           this.clearClosing(kind);
           this.setPhase(kind, prev);
+          // 关闭失败 → 露营还在跑，守护与标记都要恢复
+          if (kind === ToggleKind.CLIMATE && this.campPhase === TogglePhase.ON) {
+            this.campUserStopping = false;
+            this.startCampGuard();
+          }
           this.toast(message.length > 0 ? message : `${this.toggleLabel(kind)}指令下发失败`);
           Log.warn(`车控执行失败：${message}`);
           return;
