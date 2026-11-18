@@ -348,15 +348,23 @@ export class ChargeConfig {
 
   /**
    * 解析 DailyTime，输出 "HH:MM"。
+   *
+   * **proto3 的默认值 0 不编码** —— `minute = 0` 的字段整个不存在于字节流里，
+   * 取值得到 undefined。整点的时刻（22:00、06:00）正是这种情况，
+   * 所以不能把 undefined 当成「解析失败」，必须按 0 处理。
+   *
+   * 判定「字段缺失」的标准是整个 DailyTime 消息都不存在（value 不是 bytes），
+   * 此时返回空串表示未设置。
    */
   private static readDailyTime(value: number | Uint8Array | undefined): string {
     if (!(value instanceof Uint8Array)) {
       return '';
     }
     const inner = new ProtoReader(value).decode();
-    const hour = ProtoValue.asInteger(ProtoValue.get(inner, 1));
-    const minute = ProtoValue.asInteger(ProtoValue.get(inner, 2));
-    if (hour === undefined || minute === undefined) {
+    // 缺失按 0 处理：proto3 默认值不编码
+    const hour = ProtoValue.asInteger(ProtoValue.get(inner, 1)) ?? 0;
+    const minute = ProtoValue.asInteger(ProtoValue.get(inner, 2)) ?? 0;
+    if (hour > 23 || minute > 59) {
       return '';
     }
     return ChargeConfig.formatMinutes(hour * 60 + minute);
