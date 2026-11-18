@@ -133,6 +133,20 @@ export class ChargeConfig {
   }
 
   /**
+   * 构造**读**请求体。
+   *
+   * 读取时时区偏移固定传 0 —— 对齐参考实现（官方 App 的
+   * `chronos_request` 也是 offset=0，只有写预约充电才带真实时区）。
+   * 读取是「拿车端已有的设置」，不需要做时区换算；传真实偏移反而
+   * 可能让车端按该时区去匹配定时任务，匹配不上就返回空。
+   *
+   * @param vin 车辆 VIN
+   */
+  private static readRequest(vin: string): Uint8Array {
+    return ChargeConfig.request(vin, 0);
+  }
+
+  /**
    * 当前本地时区相对 UTC 的分钟偏移。
    *
    * `getTimezoneOffset()` 返回的是「UTC 减本地」的分钟数（东八区为 -480），
@@ -249,7 +263,24 @@ export class ChargeConfig {
       result.timerStart = ChargeConfig.readDailyTime(ProtoValue.get(fields, 1));
       result.timerStop = ChargeConfig.readDailyTime(ProtoValue.get(fields, 2));
     }
+
+    // 诊断日志：把顶层与 timer 内部的字段都打出来，
+    // 一眼能区分「车端就是没配定时任务」与「结构对不上解析错了」。
+    Log.info(`预约充电原始: 顶层字段=[${ChargeConfig.fieldKeys(outer)}] ` +
+      `timer字段=[${timer instanceof Uint8Array ? ChargeConfig.fieldKeys(new ProtoReader(timer).decode()) : '无'}] ` +
+      `解析结果 start=${result.timerStart} stop=${result.timerStop} 启用=${result.timerActivated}`);
     return result;
+  }
+
+  /**
+   * 列出消息里有哪些字段号，用于诊断。
+   */
+  private static fieldKeys(fields: Map<number, number | Uint8Array>): string {
+    const keys: string[] = [];
+    fields.forEach((value: number | Uint8Array, key: number) => {
+      keys.push(`${key}:${value instanceof Uint8Array ? `bytes(${value.length})` : value}`);
+    });
+    return keys.join(',');
   }
 
   /**
@@ -259,7 +290,7 @@ export class ChargeConfig {
    */
   static async readTargetSoc(client: GrpcClient, vin: string): Promise<number> {
     try {
-      const payload = ChargeConfig.request(vin, ChargeConfig.timezoneOffsetMinutes());
+      const payload = ChargeConfig.readRequest(vin);
       const response = await client.callStreamFirst(GrpcClient.SERVICE_TARGET_SOC, 'GetTargetSoc',
         vin, payload, GrpcClient.DEFAULT_TIMEOUT_MS, true);
       const fields = ChargeConfig.unwrap(response);
@@ -279,7 +310,7 @@ export class ChargeConfig {
    */
   static async readAmpLimit(client: GrpcClient, vin: string): Promise<number> {
     try {
-      const payload = ChargeConfig.request(vin, ChargeConfig.timezoneOffsetMinutes());
+      const payload = ChargeConfig.readRequest(vin);
       const response = await client.callStreamFirst(GrpcClient.SERVICE_AMP_LIMIT, 'GetAmpLimit',
         vin, payload, GrpcClient.DEFAULT_TIMEOUT_MS, true);
       const fields = ChargeConfig.unwrap(response);
@@ -299,7 +330,7 @@ export class ChargeConfig {
    */
   static async readChargeTimer(client: GrpcClient, vin: string): Promise<ChargeConfigSnapshot> {
     try {
-      const payload = ChargeConfig.request(vin, ChargeConfig.timezoneOffsetMinutes());
+      const payload = ChargeConfig.readRequest(vin);
       const response = await client.callStreamFirst(GrpcClient.SERVICE_CHARGE_TIMER,
         'GetGlobalChargeTimerStream', vin, payload, GrpcClient.DEFAULT_TIMEOUT_MS, true);
       return ChargeConfig.parseChargeTimer(response);
