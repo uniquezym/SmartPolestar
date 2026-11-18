@@ -118,8 +118,19 @@ export class VehicleCommands {
         break;
 
       case VehicleCommands.ACTION_LOCK_TRUNK:
-        // 尾门锁：Lock RPC + 动作枚举 1
-        writer.writeVarintField(2, 1);
+        // 尾门上锁：同样走整车锁。
+        //
+        // Lock RPC 的 field 2 是 LockType，枚举只有两个值：
+        //   0 = LOCK（整车锁）
+        //   1 = LOCK_REDUCED_GUARD（整车锁的「减弱守卫」变体，
+        //       用于车内留人/留宠物时仍锁车）
+        // **没有「仅锁尾门」这个类型** —— 原版 Android 往这里写 1，
+        // 实际发出去的是「减弱守卫整车锁」，车端不支持时就会报
+        // "Car does not support remote lock type: LOCK_REDUCED_GUARD"。
+        //
+        // 尾门锁跟随整车锁：锁车时尾门一并锁上。
+        // 所以「锁尾门」直接用整车锁的枚举值 0 即可。
+        writer.writeVarintField(2, 0);
         rpcMethod = 'Lock';
         break;
 

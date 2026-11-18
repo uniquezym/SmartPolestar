@@ -274,10 +274,37 @@
 
 | 动作 | RPC 方法 | field 2 枚举 | 说明 |
 |---|---|---|---|
-| 解锁车辆 | `Unlock` | 3 | 整车解锁 |
+| 解锁车辆 | `Unlock` | 不写 | 整车解锁 |
 | 锁定车辆 | `Lock` | 0 | 整车加锁 |
 | 解锁尾门 | `Unlock` | 1 | 仅尾门解锁 |
-| 锁定尾门 | `Lock` | 1 | 仅尾门上锁 |
+| 锁定尾门 | `Lock` | 0 | 整车加锁（尾门随之锁上） |
+
+**`Lock` 的 field 2 是 `LockType` 枚举，只有两个值：**
+
+| 数值 | 名称 | 含义 |
+|---|---|---|
+| 0 | `LOCK` | 整车加锁 |
+| 1 | `LOCK_REDUCED_GUARD` | 整车加锁的「减弱守卫」变体 —— 车内留人/留宠物时仍锁车 |
+
+**没有「仅锁尾门」这个类型。** 原版 Android 在 `lock-trunk` 时往 field 2 写 1，
+实际发出去的是「减弱守卫整车锁」—— 车端不支持该能力时返回
+`status=9 Car does not support remote lock type: LOCK_REDUCED_GUARD`。
+
+官方 Polestar App 在 C3/PCCS 平台也没有独立的尾门上锁能力
+（`C3ExteriorController` 只有 openTrunk / closeTrunk / lock / unlock / unlockTrunk）。
+
+本项目的处理：「锁定尾门」改用整车锁（field 2 = 0）——
+尾门锁跟随整车锁，锁车时尾门一并锁上，行为与原版 App 一致。
+
+**`Unlock` 的 field 2 是 `UnlockType` 枚举：**
+
+| 数值 | 名称 | 含义 |
+|---|---|---|
+| 0 | `UNLOCK_TYPE_UNSPECIFIED` | 整车解锁 |
+| 1 | `UNLOCK_TYPE_TRUNK_ONLY` | 仅尾门解锁 |
+
+整车解锁不写 field 2（默认值 0）。写了未知枚举值服务端会报
+`Can't get the number of an unknown enum value`。
 
 ### 3.2 尾门
 
