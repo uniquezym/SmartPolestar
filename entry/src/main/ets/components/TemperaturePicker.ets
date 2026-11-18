@@ -1,11 +1,15 @@
 /**
  * 温度档位快捷按钮。
  *
- * 露营模式卡片里的一行：图标 + 「目标温度」+ 三个档位按钮。
+ * 露营模式卡片里的一行：三个等宽档位按钮平铺。
  *
  * 为什么是三个固定档位而不是滑块：
  * 车端只认整度，露营场景下用户要的是「冷一点 / 标准 / 暖一点」，
  * 三个离散档位比连续滑块更好按，也避免调出 21.5 这种车端会四舍五入的值。
+ *
+ * **不用 Button 控件**：Button 自带左右内边距，档位文字放不下时
+ * 会被截成「…」—— 三个「20°」这样的短文本反而最容易被挤掉。
+ * 这里用 Row + Text 自绘按钮，尺寸与文字排版完全可控。
  *
  * 选中态用品牌蓝实心 + 白字，与卡片里的开关本体（蓝底白图标）
  * 是同一套视觉语言。
@@ -39,38 +43,32 @@ export struct TemperaturePicker {
   }
 
   build() {
-    Row() {
-      Text('目标温度')
-        .fontSize(13.5)
-        .fontColor($r('app.color.app_primary_text'))
-
-      Blank()
-
-      Row({ space: 8 }) {
-        ForEach(this.levels(), (level: number) => {
-          Button(`${level}°`, { type: ButtonType.Normal })
-            .width(48)
-            .height(28)
-            .fontSize(12.5)
+    Row({ space: 10 }) {
+      ForEach(this.levels(), (level: number) => {
+        Row() {
+          Text(`${level}°`)
+            .fontSize(15)
+            .fontWeight(FontWeight.Medium)
             .fontColor(level === this.celsius
               ? $r('app.color.app_on_accent')
-              : $r('app.color.app_secondary_text'))
-            .backgroundColor(level === this.celsius
-              ? $r('app.color.app_accent')
-              : $r('app.color.app_surface_sunken'))
-            .border({ width: 1, color: level === this.celsius
-              ? $r('app.color.app_accent')
-              : $r('app.color.app_card_border') })
-            .borderRadius(6)
-            .enabled(!this.disabled)
-            .onClick(() => {
-              this.select(level);
-            })
-        }, (level: number) => level.toString())
-      }
+              : $r('app.color.app_primary_text'))
+        }
+        .layoutWeight(1)
+        .height(42)
+        .justifyContent(FlexAlign.Center)
+        .borderRadius(8)
+        .backgroundColor(level === this.celsius
+          ? $r('app.color.app_accent')
+          : $r('app.color.app_surface_sunken'))
+        .border({ width: 1, color: level === this.celsius
+          ? $r('app.color.app_accent')
+          : $r('app.color.app_card_border') })
+        .onClick(() => {
+          this.select(level);
+        })
+      }, (level: number) => level.toString())
     }
     .width('100%')
-    .alignItems(VerticalAlign.Center)
     .padding({ top: 11, bottom: 11 })
     .border({ width: { top: 1 }, color: $r('app.color.app_rule') })
     .opacity(this.disabled ? 0.4 : 1)
