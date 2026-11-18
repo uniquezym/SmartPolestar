@@ -243,34 +243,42 @@
 
 这三项**不在 battery domain 里**，各有独立的 chronos 服务。三个服务全部走 **LBS 主机**（与同族的 `ParkingClimateTimerService` 同一条路径）。
 
-**公共请求体 `ChronosRequest`**
+**公共请求体结构**
 
-| 字段 | 含义 | 取值 |
-|---|---|---|
-| 1 | 请求 UUID | string，每次请求新生成 |
-| 2 | VIN | string |
-| 3 | source | string，固定 `"RCS"` |
-| 4 | 时区 | 嵌套消息，field 1 = 相对 UTC 的分钟偏移（东八区为 +480） |
+chronos 系的请求体是**两层**：各请求的 field 1 是一个 `bytes`，里面才是 `ChronosRequest`。
+
+```
+外层 field 1 = bytes( ChronosRequest )
+  ChronosRequest
+    field 1 = 请求 UUID（string，每次新生成）
+    field 2 = VIN（string）
+    field 3 = source（string，固定 "RCS"）
+    field 4 = TimeZone{ field 1 = 相对 UTC 的分钟偏移，东八区为 +480 }
+```
+
+**公共响应体结构**
+
+也是两层：外层 field 2 = VIN 回显、field 3 = `bytes( 真正的数据 )`。
 
 **2.10.1 充电上限（目标电量）**
 
 | 项 | 内容 |
 |---|---|
 | 服务 | `chronos.services.v1.TargetSocService` |
-| 方法 | `GetLatestTargetSoc`（UNARY） / `SetTargetSoc`（SERVER_STREAMING） |
+| 方法 | `GetTargetSoc`（SERVER_STREAMING） / `SetTargetSoc`（SERVER_STREAMING） |
 | 主机 | LBS |
-| 请求体 | field 1 = `ChronosRequest` |
+| 请求体 | field 1 = `bytes(ChronosRequest)` |
 | 查询能力 | 当前充电上限（目标电量百分比） |
 
 `SetTargetSocRequest`：
 
 | 字段 | 含义 | 取值 |
 |---|---|---|
-| 1 | request | `ChronosRequest` |
+| 1 | request | `bytes(ChronosRequest)` |
 | 2 | batteryChargeTargetLevel | 整数百分比 |
 | 3 | chargeTargetLevelSettingType | 枚举：0=未指定 1=每日 2=长途 3=自定义 |
 
-读取响应 `GetTargetSocResponse`：field 3 = `TargetSoc`（内含 field 1 = `batteryChargeTargetLevel`）、field 4 = 待生效值。
+读取响应：数据层 field 1 = 目标电量百分比。
 
 **2.10.2 电流上限**
 
@@ -279,28 +287,28 @@
 | 服务 | `chronos.services.v1.AmpLimitService` |
 | 方法 | `GetAmpLimit`（SERVER_STREAMING） / `SetAmpLimit`（SERVER_STREAMING） |
 | 主机 | LBS |
-| 请求体 | field 1 = `ChronosRequest` |
+| 请求体 | field 1 = `bytes(ChronosRequest)` |
 | 查询能力 | 当前电流上限（安培） |
 
-`SetAmpLimitRequest`：field 1 = `ChronosRequest`，field 2 = `ampLimit`（整数安培）。
+`SetAmpLimitRequest`：field 1 = `bytes(ChronosRequest)`，field 2 = `ampLimit`（整数安培）。
 
-读取响应 `GetAmpLimitResponse`：field 3 = `AmpLimit`（内含 field 1 = `ampLimit`）、field 4 = 待生效值。
+读取响应：数据层 field 1 = 电流上限（安培）。
 
 **2.10.3 预约充电时段**
 
 | 项 | 内容 |
 |---|---|
 | 服务 | `chronos.services.v2.GlobalChargeTimerService` |
-| 方法 | `GetGlobalChargeTimer`（UNARY） / `SetGlobalChargeTimer`（UNARY） |
+| 方法 | `GetGlobalChargeTimerStream`（SERVER_STREAMING） / `SetGlobalChargeTimer`（UNARY） |
 | 主机 | LBS |
-| 请求体 | field 1 = `ChronosRequest` |
+| 请求体 | field 1 = `bytes(ChronosRequest)` |
 | 查询能力 | 预约充电是否启用、开始时刻、结束时刻 |
 
 `SetGlobalChargeTimerRequest`：
 
 | 字段 | 含义 | 取值 |
 |---|---|---|
-| 1 | request | `ChronosRequest` |
+| 1 | request | `bytes(ChronosRequest)` |
 | 2 | chargeTimer | `GlobalChargeTimer` |
 | 3 | timeIsUtc0 | 布尔，false 表示传的是本地时间 |
 
@@ -313,9 +321,11 @@
 | 3 | activated（布尔） |
 | 4 | metadata |
 
-读取响应 `GetGlobalChargeTimerResponse`：field 1 = `GlobalChargeTimer`、field 2 = 待生效值。
+读取响应：顶层 field 1 = `GlobalChargeTimer`（**不走** field 3 那层包装）。
 
 **跨天说明**：开始与结束是两个独立时刻，`start > stop` 即为次日结束，车端自行判断，协议层无需特殊编码。
+
+**⚠️ 流式方法必须取首帧**：本组服务除 `SetGlobalChargeTimer` 外全是 SERVER_STREAMING —— 服务端持续推送直到流被取消。用一元调用读它们，响应体永远不结束，只能等到传输超时（12 秒），换节点重试再来 12 秒。正确做法是走服务端流，**取到第一帧就主动断开**。
 
 **写入响应状态码**：`Status` 枚举 —— 0=未知错误 1=已发送 2=已送达 3=成功 4=已同步 5=车辆离线 6=车辆错误 7=错误 8=已被替换。`SetTargetSocResponse` / `SetAmpLimitResponse` 的 status 在 field 3、message 在 field 4；`SetGlobalChargeTimerResponse` 的 status 在 field 2、message 在 field 3。
 
@@ -466,11 +476,11 @@
 
 | 配置项 | 服务 | 读方法 | 写方法 | 写入字段 |
 |---|---|---|---|---|
-| 充电上限 | `chronos.services.v1.TargetSocService` | `GetLatestTargetSoc` | `SetTargetSoc` | field 2 = 目标电量百分比，field 3 = 设置类型（固定 3 自定义） |
+| 充电上限 | `chronos.services.v1.TargetSocService` | `GetTargetSoc` | `SetTargetSoc` | field 2 = 目标电量百分比，field 3 = 设置类型（固定 3 自定义） |
 | 电流上限 | `chronos.services.v1.AmpLimitService` | `GetAmpLimit` | `SetAmpLimit` | field 2 = 电流上限（安培） |
-| 预约充电 | `chronos.services.v2.GlobalChargeTimerService` | `GetGlobalChargeTimer` | `SetGlobalChargeTimer` | field 2 = `GlobalChargeTimer`（起止时刻 + 启用开关），field 3 = 是否 UTC0 |
+| 预约充电 | `chronos.services.v2.GlobalChargeTimerService` | `GetGlobalChargeTimerStream` | `SetGlobalChargeTimer` | field 2 = `GlobalChargeTimer`（起止时刻 + 启用开关），field 3 = 是否 UTC0 |
 
-三个写方法的请求体都以 field 1 携带 `ChronosRequest`（VIN / source / 时区 / 请求 UUID）。
+三个写方法的请求体都以 field 1 携带 `bytes(ChronosRequest)`（VIN / source / 时区 / 请求 UUID）。
 
 ---
 

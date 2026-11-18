@@ -169,6 +169,83 @@ export class GrpcClient {
   }
 
   /**
+   * 以服务端流的方式调用一个方法，**只取第一帧**就返回。
+   *
+   * 为什么需要这个：有些 chronos 服务（如 `GetAmpLimit` / `GetTargetSoc` /
+   * `GetGlobalChargeTimerStream`）在官方 proto 里是 SERVER_STREAMING，
+   * 服务端会持续推送直到流被取消。用一元调用去读它们，响应体永远不结束，
+   * 只能等到传输超时 —— 表现为「下拉刷新卡住十几秒，然后报超时」。
+   *
+   * 取到第一帧就主动断开，对这类「推送当前状态」的服务语义完全正确：
+   * 第一帧就是最新状态，后续帧只是重复。
+   *
+   * @param service   服务全名
+   * @param method    方法名
+   * @param vin       车辆 VIN
+   * @param payload   请求负载
+   * @param timeoutMs 超时
+   * @param useLbs    是否走 LBS 主机
+   */
+  async callStreamFirst(service: string, method: string, vin: string, payload: Uint8Array,
+    timeoutMs: number = GrpcClient.DEFAULT_TIMEOUT_MS, useLbs: boolean = false): Promise<Uint8Array> {
+    if (this.session === undefined) {
+      throw new BusinessError(-1, '会话未初始化');
+    }
+
+    const host = useLbs ? this.session.c3LbsHost : this.session.c3Host;
+    if (host.length === 0) {
+      throw new BusinessError(-1, useLbs ? 'C3 LBS 主机未解析，请先完成服务发现' : 'C3 主机未解析，请先完成服务发现');
+    }
+
+    const fullMethod = `${service}/${method}`;
+    const channel = this.channel(host);
+
+    return await new Promise<Uint8Array>((resolve: (value: Uint8Array) => void,
+      reject: (err: BusinessError) => void) => {
+      let settled = false;
+      // cancel 由 callStream 返回，回调里要用它断流。
+      // 声明在调用之前，避免回调在赋值前触发时的引用问题。
+      let cancel: () => void = (): void => {};
+
+      const stop = (): void => {
+        try {
+          cancel();
+        } catch (err) {
+          Log.warn(`关闭 gRPC 流失败 ${fullMethod}: ${(err as Error).message}`);
+        }
+      };
+
+      cancel = channel.callStream(fullMethod, this.session?.accessToken ?? '', vin, payload,
+        (message: Uint8Array) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          // 拿到第一帧就收工，并主动断开这条流。
+          stop();
+          resolve(message);
+        },
+        (error: string | null) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          reject(new BusinessError(200, error ?? '流结束但没有收到数据'));
+        });
+
+      // 兜底：服务端一直没推帧
+      setTimeout(() => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        stop();
+        reject(new BusinessError(200, '等待服务端响应超时'));
+      }, timeoutMs);
+    });
+  }
+
+  /**
    * 调用一个状态查询接口（请求体仅含 VIN，field 2 = VIN）。
    *
    * 对应 Android 端 ga0.m1418m0 -> m1389s0(vin, 2)：tag = (2 << 3) | 2 = 0x12。

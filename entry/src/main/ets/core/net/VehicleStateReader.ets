@@ -257,13 +257,21 @@ export class VehicleStateReader {
    * 这三项来自三个独立的 chronos 服务，不在状态域里，
    * 所以这里逐个服务单独读，不走 callStatus（那套是 vehiclestates 系的格式）。
    *
+   * 三个请求**并行发出**：串行的话总耗时是三者之和，
+   * 任何一个卡住都会把整次刷新拖长。
+   *
    * 读失败不影响其他项 —— 某一项拿不到就保持 -1 / 未设置，
    * 卡片上对应位置显示「—」。
    */
   static async readChargeConfig(client: GrpcClient, vin: string, state: VehicleState): Promise<void> {
-    const snapshot = await ChargeConfig.readChargeTimer(client, vin);
-    state.targetSoc = await ChargeConfig.readTargetSoc(client, vin);
-    state.ampLimit = await ChargeConfig.readAmpLimit(client, vin);
+    const results = await Promise.all([
+      ChargeConfig.readChargeTimer(client, vin),
+      ChargeConfig.readTargetSoc(client, vin),
+      ChargeConfig.readAmpLimit(client, vin)
+    ]);
+    const snapshot = results[0];
+    state.targetSoc = results[1];
+    state.ampLimit = results[2];
     state.chargeTimerActivated = snapshot.timerActivated;
     state.chargeTimerStartMinutes = ChargeConfig.minutesOf(snapshot.timerStart);
     state.chargeTimerStopMinutes = ChargeConfig.minutesOf(snapshot.timerStop);
