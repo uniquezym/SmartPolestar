@@ -37,6 +37,16 @@ export struct ChargeConfigCard {
   @Prop saving: boolean = false;
 
   /**
+   * 「保存配置」按钮是否处于按压态。
+   *
+   * 系统 Button 的按压反馈是内建的，但它的高亮发生在**抬手**时才刷新，
+   * 手指按住时看不到变化，松手才闪一下 —— 观感上像「延迟响应」。
+   * 这里改成自绘按钮，用触摸事件直接驱动背景色，
+   * 按下即变色，抬手即还原。
+   */
+  @State savePressed: boolean = false;
+
+  /**
    * 车端**已生效**的充电上限（百分比），-1 表示未知。
    *
    * 与上面那组编辑值一起才能判断「有没有改动」——
@@ -173,6 +183,44 @@ export struct ChargeConfigCard {
    */
   private stopText(): string {
     return this.timerStopMinutes >= 0 ? ChargeConfig.formatMinutes(this.timerStopMinutes) : '—';
+  }
+
+  /**
+   * 保存按钮的背景色。
+   *
+   * 按下态用更深的一档颜色，让「按下去」这件事在手指接触的瞬间就可见；
+   * 置灰态（与车端一致）按下的颜色变化也更浅，避免看起来仍可点击。
+   */
+  private saveButtonColor(): ResourceColor {
+    if (!this.dirty()) {
+      return this.savePressed
+        ? $r('app.color.app_surface_sunken_pressed')
+        : $r('app.color.app_surface_sunken');
+    }
+    return this.savePressed
+      ? $r('app.color.app_accent_pressed')
+      : $r('app.color.app_accent');
+  }
+
+  /**
+   * 跟踪保存按钮的按压状态。
+   *
+   * Down 立即置按压态，Up / Cancel 复位。
+   * 手指划出按钮范围时上报的是 Cancel —— 一样要复位，
+   * 否则按钮会一直停在按下色。
+   */
+  private handleSaveTouch(event: TouchEvent): void {
+    switch (event.type) {
+      case TouchType.Down:
+        this.savePressed = true;
+        break;
+      case TouchType.Up:
+      case TouchType.Cancel:
+        this.savePressed = false;
+        break;
+      default:
+        break;
+    }
   }
 
   /**
@@ -379,20 +427,31 @@ export struct ChargeConfigCard {
 
       // ---------- 保存配置 ----------
       // 与车端一致时置灰 —— 没有需要保存的内容。
-      Button('保存配置', { type: ButtonType.Normal })
-        .width('100%')
-        .height(42)
-        .fontSize(13.5)
-        .fontColor(this.dirty() ? $r('app.color.app_on_accent') : $r('app.color.app_tertiary_text'))
-        .backgroundColor(this.dirty() ? $r('app.color.app_accent') : $r('app.color.app_surface_sunken'))
-        .borderRadius(6)
-        .enabled(!this.saving && this.dirty())
-        .margin({ top: 14 })
-        .onClick(() => {
-          if (this.onSave !== undefined) {
-            this.onSave();
-          }
-        })
+      // 自绘而非用 Button：系统 Button 的按压高亮在抬手时才刷新，
+      // 按住看不到变化；这里用 onTouch 直接驱动背景色，按下即变色。
+      Row() {
+        Text('保存配置')
+          .fontSize(13.5)
+          .fontColor(this.dirty() ? $r('app.color.app_on_accent') : $r('app.color.app_tertiary_text'))
+      }
+      .width('100%')
+      .height(42)
+      .justifyContent(FlexAlign.Center)
+      .borderRadius(6)
+      .backgroundColor(this.saveButtonColor())
+      .margin({ top: 14 })
+      .opacity(this.saving ? 0.6 : 1)
+      .onTouch((event: TouchEvent) => {
+        this.handleSaveTouch(event);
+      })
+      .onClick(() => {
+        if (this.saving || !this.dirty()) {
+          return;
+        }
+        if (this.onSave !== undefined) {
+          this.onSave();
+        }
+      })
     }
     .width('100%')
     .padding({ top: 15, left: 16, right: 16, bottom: 16 })

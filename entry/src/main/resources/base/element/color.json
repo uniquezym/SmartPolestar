@@ -69,6 +69,14 @@
       "value": "#003057"
     },
     {
+      "name": "app_accent_pressed",
+      "value": "#001F3C"
+    },
+    {
+      "name": "app_surface_sunken_pressed",
+      "value": "#C9C8C0"
+    },
+    {
       "name": "app_accent_soft_bg",
       "value": "#DFE7ED"
     },
