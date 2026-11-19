@@ -178,12 +178,12 @@ export struct VehiclePlan {
   @Builder
   hoodMarker() {
     Image(this.hoodOpen ? $r('app.media.polestar_logo_warn') : $r('app.media.polestar_logo'))
-      .width(17)
-      .height(17)
+      .width(15)
+      .height(15)
       .objectFit(ImageFit.Contain)
       .position({
-        x: 100 - 8.5,
-        y: 22 - 8.5
+        x: 100 - 7.5,
+        y: 22 - 7.5
       })
   }
 
