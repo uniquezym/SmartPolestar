@@ -466,7 +466,7 @@ export struct HealthCard {
 
         Blank()
 
-        Text(this.lightFaultCount > 0 ? `${this.lightFaultCount} 个灯组故障` : '无故障')
+        Text(this.lightFaultCount > 0 ? `${this.lightFaultCount} 个灯组故障` : '正常')
           .fontSize(11.5)
           .fontColor(this.lightFaultCount > 0
             ? $r('app.color.app_error')
