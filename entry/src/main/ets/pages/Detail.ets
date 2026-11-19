@@ -72,6 +72,8 @@ export struct Detail {
     }
     .width('100%')
     .height('100%')
+    // 内容比屏幕短时默认会垂直居中，这里改成从上往下排。
+    .align(Alignment.Top)
     .backgroundColor($r('app.color.app_background'))
   }
 }
