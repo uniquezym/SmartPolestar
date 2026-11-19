@@ -262,21 +262,21 @@ export struct Control {
         .margin({ bottom: 11 })
 
         // ---------- 退出登录 ----------
+        // 与充电卡片的「保存配置」按钮同一套视觉：深蓝底 + 白字 + 6vp 圆角。
         // 自绘而非用 Button：系统 Button 的按压高亮在抬手时才刷新，
         // 按住看不到变化；这里用 onTouch 直接驱动背景色，按下即变色。
         Row() {
           Text('退出登录')
-            .fontSize(14)
-            .fontColor($r('app.color.app_accent_text'))
+            .fontSize(13.5)
+            .fontColor($r('app.color.app_on_accent'))
         }
         .width('100%')
-        .height(46)
+        .height(42)
         .justifyContent(FlexAlign.Center)
-        .borderRadius(8)
+        .borderRadius(6)
         .backgroundColor(this.logoutPressed
-          ? $r('app.color.app_accent_soft_pressed')
-          : $r('app.color.app_accent_soft'))
-        .border({ width: 1, color: $r('app.color.app_accent') })
+          ? $r('app.color.app_accent_pressed')
+          : $r('app.color.app_accent'))
         .margin({ top: 4, bottom: 24 })
         .onTouch((event: TouchEvent) => {
           this.handleLogoutTouch(event);
