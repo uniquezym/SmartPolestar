@@ -435,60 +435,6 @@ struct Index {
    */
   private swiperController: SwiperController = new SwiperController();
 
-  /** 页码指示点是否可见 —— 只在滑动过程中出现，停手后稍作停留再隐去。 */
-  @State tabIndicatorVisible: boolean = false;
-  /** 指示点隐藏的延时句柄。 */
-  private tabIndicatorTimer: number = -1;
-  /** 本次切换是否由底部导航点击触发 —— 这种切换不弹指示点。 */
-  private tabJumpPending: boolean = false;
-  /** 底部导航跳转标记的清除句柄。 */
-  private tabJumpTimer: number = -1;
-
-  /**
-   * 指示点延迟隐藏的时长（毫秒）。
-   *
-   * 滑动松手后指示点不立刻消失，留一点时间让用户看清落在第几页。
-   */
-  private static readonly INDICATOR_HIDE_DELAY_MS: number = 900;
-
-  /**
-   * 显示页码指示点。
-   *
-   * 滑动过程中由手势回调反复调用，每次都重置隐藏计时 ——
-   * 只要手指还在动，指示点就一直在。
-   */
-  private showTabIndicator(): void {
-    this.tabIndicatorVisible = true;
-    if (this.tabIndicatorTimer !== -1) {
-      clearTimeout(this.tabIndicatorTimer);
-      this.tabIndicatorTimer = -1;
-    }
-    this.tabIndicatorTimer = setTimeout(() => {
-      this.tabIndicatorVisible = false;
-      this.tabIndicatorTimer = -1;
-    }, Index.INDICATOR_HIDE_DELAY_MS);
-  }
-
-  /**
-   * 隐藏页码指示点（可带延时）。
-   *
-   * @param delay 延时毫秒数；传 0 表示立即隐藏。
-   */
-  private hideTabIndicator(delay: number = 0): void {
-    if (this.tabIndicatorTimer !== -1) {
-      clearTimeout(this.tabIndicatorTimer);
-      this.tabIndicatorTimer = -1;
-    }
-    if (delay <= 0) {
-      this.tabIndicatorVisible = false;
-      return;
-    }
-    this.tabIndicatorTimer = setTimeout(() => {
-      this.tabIndicatorVisible = false;
-      this.tabIndicatorTimer = -1;
-    }, delay);
-  }
-
   private context: common.UIAbilityContext | undefined = undefined;
   private repository: VehicleRepository | undefined = undefined;
   /** 露营模式控制器 —— 负责时长档位、到期时刻与倒计时心跳。 */
@@ -693,7 +639,6 @@ struct Index {
     this.stopTextTimer();
     this.stopChargeTimer();
     this.stopLocationTimer();
-    this.hideTabIndicator();
     // 只取消已排的检查点，保留预计结束时刻 —— 它是绝对时刻，
     // 回到前台时按它重排即可，不用重新推算。
     this.clearClimateSchedule();
@@ -4455,65 +4400,14 @@ struct Index {
         return;
       }
       this.currentTab = index;
-      // 底部导航跳转不算「滑动」—— 不弹页码指示点。
-      this.tabJumpPending = true;
-      this.hideTabIndicator();
-      if (this.tabJumpTimer !== -1) {
-        clearTimeout(this.tabJumpTimer);
-      }
-      this.tabJumpTimer = setTimeout(() => {
-        this.tabJumpPending = false;
-        this.tabJumpTimer = -1;
-      }, 600);
       // 用控制器跳转 —— 带动画，与手指拖动的观感一致。
       this.swiperController.changeIndex(index);
     })
   }
 
-  /**
-   * 清除「底部导航跳转」标记。
-   *
-   * 标记只在一次跳转动画期间有效 —— 动画结束就清掉，
-   * 之后的滑动又是「手势触发」，指示点照常出现。
-   */
-  private clearTabJumpPending(): void {
-    this.tabJumpPending = false;
-    if (this.tabJumpTimer !== -1) {
-      clearTimeout(this.tabJumpTimer);
-      this.tabJumpTimer = -1;
-    }
-  }
-
-  /**
-   * 自绘的页码指示点。
-   *
-   * 用 Swiper 自带的 indicator 做不到「只在滑动时出现」——
-   * 它常驻在底部，且无法被外部状态控制显示时机。
-   * 这里叠一层自己的点：滑动中显示，松手后延时隐去。
-   */
-  @Builder
-  tabIndicator() {
-    Row({ space: 6 }) {
-      ForEach([0, 1, 2], (index: number) => {
-        Circle()
-          .width(this.currentTab === index ? 6 : 4)
-          .height(this.currentTab === index ? 6 : 4)
-          .fill(this.currentTab === index
-            ? $r('app.color.app_accent')
-            : $r('app.color.app_rule_strong'))
-      }, (index: number) => index.toString())
-    }
-    .padding({ left: 10, right: 10, top: 6, bottom: 6 })
-    .backgroundColor($r('app.color.app_card_background'))
-    .borderRadius(14)
-    .border({ width: 1, color: $r('app.color.app_card_border') })
-    .shadow({ radius: 8, color: '#14000000', offsetY: 2 })
-  }
-
   build() {
     Column() {
       // ---------- 内容区：三个 Tab 放进 Swiper，支持左右拖动切换 ----------
-      Stack({ alignContent: Alignment.Bottom }) {
       Swiper(this.swiperController) {
         Refresh({ refreshing: $$this.refreshing }) {
           Scroll() {
@@ -4865,40 +4759,12 @@ struct Index {
           .height('100%')
       }
       .width('100%')
-      .height('100%')
+      .layoutWeight(1)
       .loop(false)
       .duration(260)
-      .indicator(false)
       .onChange((index: number) => {
         this.currentTab = index;
       })
-      .onAnimationEnd((index: number) => {
-        // 导航点击跳转不弹指示点；手指拖动则显示并延时隐去。
-        if (this.tabJumpPending) {
-          this.clearTabJumpPending();
-          return;
-        }
-        this.showTabIndicator();
-      })
-      .onGestureSwipe((index: number) => {
-        // 滑动过程中持续显示 —— 每帧都会重置隐藏计时。
-        if (this.tabJumpPending) {
-          return;
-        }
-        this.showTabIndicator();
-      })
-      // 指示点浮在内容上方，靠近底部但不遮挡底部导航。
-      if (this.tabIndicatorVisible) {
-        Column() {
-          this.tabIndicator()
-        }
-        .width('100%')
-        .alignItems(HorizontalAlign.Center)
-        .padding({ bottom: 14 })
-      }
-      }
-      .width('100%')
-      .layoutWeight(1)
 
       // ---------- 底部导航 ----------
       Row() {
