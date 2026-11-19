@@ -4762,6 +4762,9 @@ struct Index {
       .layoutWeight(1)
       .loop(false)
       .duration(260)
+      // 不显示页码指示点 —— 底部导航已经标明了当前位置，
+      // 再加一层点只是重复信息，还压住页面内容。
+      .indicator(false)
       .onChange((index: number) => {
         this.currentTab = index;
       })
