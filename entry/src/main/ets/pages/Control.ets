@@ -102,6 +102,34 @@ export struct Control {
   /** 点击退出登录。 */
   onLogout?: () => void;
 
+  /**
+   * 「退出登录」按钮是否处于按压态。
+   *
+   * 与充电卡片的「保存配置」一致 —— 自绘按钮 + 触摸事件驱动背景色，
+   * 按下即变色，不依赖系统 Button 的延迟高亮。
+   */
+  @State logoutPressed: boolean = false;
+
+  /**
+   * 跟踪「退出登录」按钮的按压状态。
+   *
+   * 手指划出按钮范围时上报 Cancel，同样要复位，
+   * 否则按钮会一直停在按下色。
+   */
+  private handleLogoutTouch(event: TouchEvent): void {
+    switch (event.type) {
+      case TouchType.Down:
+        this.logoutPressed = true;
+        break;
+      case TouchType.Up:
+      case TouchType.Cancel:
+        this.logoutPressed = false;
+        break;
+      default:
+        break;
+    }
+  }
+
   build() {
     Scroll() {
       Column() {
@@ -234,20 +262,30 @@ export struct Control {
         .margin({ bottom: 11 })
 
         // ---------- 退出登录 ----------
-        Button('退出登录', { type: ButtonType.Normal })
-          .width('100%')
-          .height(46)
-          .fontSize(14)
-          .fontColor($r('app.color.app_accent_text'))
-          .backgroundColor($r('app.color.app_accent_soft'))
-          .border({ width: 1, color: $r('app.color.app_accent') })
-          .borderRadius(8)
-          .margin({ top: 4, bottom: 24 })
-          .onClick(() => {
-            if (this.onLogout !== undefined) {
-              this.onLogout();
-            }
-          })
+        // 自绘而非用 Button：系统 Button 的按压高亮在抬手时才刷新，
+        // 按住看不到变化；这里用 onTouch 直接驱动背景色，按下即变色。
+        Row() {
+          Text('退出登录')
+            .fontSize(14)
+            .fontColor($r('app.color.app_accent_text'))
+        }
+        .width('100%')
+        .height(46)
+        .justifyContent(FlexAlign.Center)
+        .borderRadius(8)
+        .backgroundColor(this.logoutPressed
+          ? $r('app.color.app_accent_soft_pressed')
+          : $r('app.color.app_accent_soft'))
+        .border({ width: 1, color: $r('app.color.app_accent') })
+        .margin({ top: 4, bottom: 24 })
+        .onTouch((event: TouchEvent) => {
+          this.handleLogoutTouch(event);
+        })
+        .onClick(() => {
+          if (this.onLogout !== undefined) {
+            this.onLogout();
+          }
+        })
       }
       .width('100%')
       .padding({ left: 18, right: 18 })
