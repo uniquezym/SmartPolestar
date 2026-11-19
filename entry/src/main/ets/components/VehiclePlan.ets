@@ -169,6 +169,25 @@ export struct VehiclePlan {
   }
 
   /**
+   * 机盖标记点：用极星 logo 取代原来的「盖」字圆点。
+   *
+   * 车头是整车的品牌位置，圆形标记点在这里只是一枚无意义的文字标签；
+   * 换成 logo 后既说得清「这是机盖」，也把品牌标识放到了最显眼的位置。
+   * 机盖开启时 logo 转警示色 —— 与其他部件的开启态保持同一套语言。
+   */
+  @Builder
+  hoodMarker() {
+    Image(this.hoodOpen ? $r('app.media.polestar_logo_warn') : $r('app.media.polestar_logo'))
+      .width(26)
+      .height(26)
+      .objectFit(ImageFit.Contain)
+      .position({
+        x: 100 - 13,
+        y: 22 - 13
+      })
+  }
+
+  /**
    * 充电口标记点：充电枪已连接时用深蓝实心圆盘 + 白色插头 + 单圈呼吸光环。
    *
    * 深蓝实心对纸白底是高对比，一眼可见；实心蓝底白图标也与右侧快捷按钮
@@ -469,7 +488,7 @@ export struct VehiclePlan {
       .position({ x: 39, y: 254 })
 
       // ---------- 位置标记点（vp 坐标，与缩放后的车模对齐） ----------
-      this.marker(new PlanMarker(100, 22, '盖', this.hoodOpen))
+      this.hoodMarker()
       if (this.charging) {
         this.chargingPortMarker()
       } else {
@@ -502,8 +521,6 @@ export struct VehiclePlan {
       .hitTestBehavior(HitTestMode.Transparent)
 
       // 说明文字
-      Text('机盖').fontSize(9).fontColor($r('app.color.app_tertiary_text'))
-        .position({ x: 118, y: 14 })
       // 充电口标签上移，给充电线让出位置
       Text('充电口').fontSize(9).fontColor($r('app.color.app_tertiary_text'))
         .position({ x: 2, y: 196 })
