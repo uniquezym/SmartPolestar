@@ -427,6 +427,14 @@ struct Index {
   /** 当前 Tab：0=概览 1=控制 2=详情。 */
   @State currentTab: number = 0;
 
+  /**
+   * Tab 内容的滑动控制器。
+   *
+   * 三个 Tab 放进同一个 Swiper —— 左右拖动即可切换，
+   * 底部导航点击时用 changeIndex 带动画跳过去。
+   */
+  private swiperController: SwiperController = new SwiperController();
+
   private context: common.UIAbilityContext | undefined = undefined;
   private repository: VehicleRepository | undefined = undefined;
   /** 露营模式控制器 —— 负责时长档位、到期时刻与倒计时心跳。 */
@@ -4388,14 +4396,19 @@ struct Index {
     .height(58)
     .justifyContent(FlexAlign.Center)
     .onClick(() => {
+      if (index === this.currentTab) {
+        return;
+      }
       this.currentTab = index;
+      // 用控制器跳转 —— 带动画，与手指拖动的观感一致。
+      this.swiperController.changeIndex(index);
     })
   }
 
   build() {
     Column() {
-      // ---------- 内容区：按 Tab 切换 ----------
-      if (this.currentTab === 0) {
+      // ---------- 内容区：三个 Tab 放进 Swiper，支持左右拖动切换 ----------
+      Swiper(this.swiperController) {
         Refresh({ refreshing: $$this.refreshing }) {
           Scroll() {
           // 区块间距由各区块的 margin 表达（space 设为 0）。
@@ -4657,14 +4670,13 @@ struct Index {
           .padding({ left: 18, right: 18 })
           }
           .width('100%')
-          .layoutWeight(1)
+          .height('100%')
         }
         .width('100%')
-        .layoutWeight(1)
+        .height('100%')
         .onRefreshing(() => {
           this.onPullRefresh();
         })
-      } else if (this.currentTab === 1) {
         Control({
           campPhase: this.campPhase,
           campDurationMinutes: this.campDurationMinutes,
@@ -4741,12 +4753,18 @@ struct Index {
           }
         })
           .width('100%')
-          .layoutWeight(1)
-      } else {
+          .height('100%')
         Detail()
-        .width('100%')
-        .layoutWeight(1)
+          .width('100%')
+          .height('100%')
       }
+      .width('100%')
+      .layoutWeight(1)
+      .loop(false)
+      .duration(260)
+      .onChange((index: number) => {
+        this.currentTab = index;
+      })
 
       // ---------- 底部导航 ----------
       Row() {
