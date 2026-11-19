@@ -411,15 +411,17 @@ export class VehicleStateReader {
 
     // 逐项枚举值 —— 详情页的健康卡片要按项显示状态，
     // 不能只拿到一句汇总文案。
-    state.brakeFluidWarning = ProtoValue.asInteger(ProtoValue.get(fields, 6)) ?? 0;
-    state.coolantWarning = ProtoValue.asInteger(ProtoValue.get(fields, 7)) ?? 0;
-    state.washerFluidWarning = ProtoValue.asInteger(ProtoValue.get(fields, 13)) ?? 0;
-    state.lowVoltageBatteryWarning = ProtoValue.asInteger(ProtoValue.get(fields, 38)) ?? 0;
+    // 字段缺失用 -1 表示「车端未上报」，与 0（协议里的「未指定」）区分开。
+    state.brakeFluidWarning = ProtoValue.asInteger(ProtoValue.get(fields, 6)) ?? -1;
+    state.coolantWarning = ProtoValue.asInteger(ProtoValue.get(fields, 7)) ?? -1;
+    state.washerFluidWarning = ProtoValue.asInteger(ProtoValue.get(fields, 13)) ?? -1;
+    state.lowVoltageBatteryWarning = ProtoValue.asInteger(ProtoValue.get(fields, 38)) ?? -1;
 
     // 四轮胎压：field 9/10/11/12，顺序左前 / 右前 / 左后 / 右后。
+    // 这四个字段是 optional 的 —— 未装胎压监测的车不会下发，值为 -1。
     state.tyreWarnings = [];
     for (let i = 0; i < 4; i++) {
-      state.tyreWarnings.push(ProtoValue.asInteger(ProtoValue.get(fields, 9 + i)) ?? 0);
+      state.tyreWarnings.push(ProtoValue.asInteger(ProtoValue.get(fields, 9 + i)) ?? -1);
     }
 
     // 外部灯组故障。

@@ -371,13 +371,13 @@ struct Index {
   /** 距离下次保养的剩余里程（km），-1 表示未知。 */
   @State serviceRemainingKm: number = -1;
   /** 制动液告警枚举值。 */
-  @State brakeFluidWarning: number = 0;
+  @State brakeFluidWarning: number = -1;
   /** 冷却液告警枚举值。 */
-  @State coolantWarning: number = 0;
+  @State coolantWarning: number = -1;
   /** 玻璃水告警枚举值。 */
-  @State washerFluidWarning: number = 0;
+  @State washerFluidWarning: number = -1;
   /** 12V 蓄电池告警枚举值。 */
-  @State lowVoltageBatteryWarning: number = 0;
+  @State lowVoltageBatteryWarning: number = -1;
   /** 四轮胎压告警枚举值，顺序：左前 / 右前 / 左后 / 右后。 */
   @State tyreWarnings: number[] = [];
   /** 外部灯光故障灯组数。 */

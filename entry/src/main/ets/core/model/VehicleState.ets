@@ -170,18 +170,20 @@ export class VehicleState {
   serviceRemainingKm: number | undefined = undefined;
 
   // ---- 健康明细（逐项枚举值）----
+  // 这些字段都是 optional 的 —— 车端没上报时值为 -1，
+  // 与 0（协议里的「未指定」）区分开，UI 上显示「未上报」而不是「未知」。
   /**
    * 制动液液位告警枚举值。
    *
    * 协议 BrakeFluidLevelWarning：1=无告警 2=偏低 3=严重偏低。
    */
-  brakeFluidWarning: number = 0;
+  brakeFluidWarning: number = -1;
   /** 冷却液液位告警枚举值。1=无告警 2=偏低。 */
-  coolantWarning: number = 0;
+  coolantWarning: number = -1;
   /** 玻璃水液位告警枚举值。1=无告警 2=偏低。 */
-  washerFluidWarning: number = 0;
+  washerFluidWarning: number = -1;
   /** 12V 蓄电池告警枚举值。1=无告警 2=偏低。 */
-  lowVoltageBatteryWarning: number = 0;
+  lowVoltageBatteryWarning: number = -1;
   /**
    * 四轮胎压告警枚举值，顺序：左前 / 右前 / 左后 / 右后。
    *
