@@ -18,6 +18,8 @@ import { CardPublisher } from '../core/vehicle/CardPublisher';
 import { BiometricGuard, BiometricResult } from '../core/vehicle/BiometricGuard';
 import { SessionStore } from '../core/session/SessionStore';
 import { StateDomain } from '../core/vehicle/VehicleStateStream';
+import { LiveViewManager } from '../core/liveview/LiveViewManager';
+import { AirPurifyLiveData } from '../core/liveview/LiveViewData';
 import { BusinessError, Log } from '../common/Log';
 
 /**
@@ -1308,6 +1310,9 @@ struct Index {
       this.applyState(states[0]);
       // 记录刷新时刻，供「距上次刷新」文案使用
       this.markRefreshed();
+      // 核对实况窗与车端现状是否一致 ——
+      // 进程被杀期间净化可能已经到时停了，实况窗却还留在状态栏。
+      await this.reconcileAirLiveView(states[0].air === '开启');
       // 把状态同步到桌面卡片
       this.publishCard();
       // 充电配置来自三个独立的 chronos 服务，不在状态域里，单独读一次。
@@ -1445,6 +1450,8 @@ struct Index {
     this.stopClimateTimer();
     this.stopLocationTimer();
     this.stopVehicleStream();
+    // 退出登录 → 实况窗也要拆掉，不能让控制入口留在系统层
+    await LiveViewManager.stop();
     if (this.repository !== undefined) {
       await this.repository.logout();
     }
@@ -1630,6 +1637,8 @@ struct Index {
         this.airRemainingMinutes = state.airRuntimeMinutes ?? -1;
         this.applyStreamPhase(ToggleKind.PURIFIER, state.air, '开启', '关闭');
         this.syncClimateTimer();
+        // 净化状态一变，实况窗就要跟着变 —— 开就建，关就拆。
+        this.syncAirLiveView();
         break;
       case 'exterior':
         this.locked = state.locked;
@@ -1787,6 +1796,70 @@ struct Index {
       // 这时也要撤掉「正在关闭」标记，否则状态行会一直挂着。
       this.clearClosing(kind);
     }
+  }
+
+  /**
+   * 核对实况窗与车端现状。
+   *
+   * @param stillRunning 车端是否仍在净化
+   */
+  private async reconcileAirLiveView(stillRunning: boolean): Promise<void> {
+    await LiveViewManager.reconcile(stillRunning);
+    if (stillRunning) {
+      // 车端还在跑，但实况窗可能已随进程被杀而消失 —— 补建一个
+      if (!await LiveViewManager.exists()) {
+        await this.startAirLiveView();
+      } else {
+        this.syncAirLiveView();
+      }
+    }
+  }
+
+  /**
+   * 空气净化实况窗的当前数据。
+   */
+  private airLiveData(): AirPurifyLiveData {
+    return {
+      aqi: this.airQualityIndex,
+      pm25: this.pm25UgM3,
+      remainingMinutes: this.airRemainingMinutes
+    };
+  }
+
+  /**
+   * 同步空气净化实况窗。
+   *
+   * 净化在跑就更新，不在跑就销毁 —— 实况窗的存在与否
+   * 必须与「车端是否还在净化」严格一致，否则会留下幽灵卡片。
+   */
+  private syncAirLiveView(): void {
+    const context = this.context;
+    if (context === undefined) {
+      return;
+    }
+    if (!this.airActive()) {
+      LiveViewManager.stop().catch((err: Error) => {
+        Log.warn(`销毁空气净化实况窗失败: ${err.message}`);
+      });
+      return;
+    }
+    LiveViewManager.update(context, this.airLiveData()).catch((err: Error) => {
+      Log.warn(`更新空气净化实况窗失败: ${err.message}`);
+    });
+  }
+
+  /**
+   * 空气净化开启后创建实况窗。
+   */
+  private async startAirLiveView(): Promise<void> {
+    const context = this.context;
+    if (context === undefined) {
+      return;
+    }
+    await LiveViewManager.start(context, this.airLiveData());
+    // 实况窗的「停止净化」按钮靠进程内公共事件执行 ——
+    // 进程被杀了按钮就点不动，所以净化期间要申请长时任务保活。
+    await BackgroundKeeper.start(context as common.UIAbilityContext);
   }
 
   /**
@@ -3201,6 +3274,8 @@ struct Index {
       await this.executeAction(VehicleCommands.ACTION_AIR_STOP);
       this.airPhase = TogglePhase.OFF;
       this.airClosing = false;
+      // 净化被连带关掉了 —— 实况窗也要跟着拆
+      this.syncAirLiveView();
     }
     this.toast('露营模式已到时，驻车空调已关闭');
   }
@@ -3989,6 +4064,16 @@ struct Index {
     }
     if (kind === ToggleKind.CLIMATE || kind === ToggleKind.PURIFIER) {
       this.syncClimateTimer();
+      if (kind === ToggleKind.PURIFIER) {
+        // 净化开启 → 建实况窗；净化关闭 → 拆实况窗。
+        if (target === TogglePhase.ON) {
+          this.startAirLiveView().catch((err: Error) => {
+            Log.warn(`创建空气净化实况窗失败: ${err.message}`);
+          });
+        } else {
+          this.syncAirLiveView();
+        }
+      }
       return;
     }
     if (this.exteriorPrimed) {

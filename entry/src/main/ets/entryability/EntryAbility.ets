@@ -1,9 +1,11 @@
-import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.AbilityKit';
+import { AbilityConstant, common, ConfigurationConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { router, window } from '@kit.ArkUI';
-import { BusinessError } from '@kit.BasicServicesKit';
+import { BusinessError, commonEventManager } from '@kit.BasicServicesKit';
 import { BackgroundKeeper } from '../service/BackgroundKeeper';
 import { CardIntent } from '../core/vehicle/CardIntent';
+import { LiveViewData } from '../core/liveview/LiveViewData';
+import { PurifyCommand } from '../core/liveview/PurifyCommand';
 
 const DOMAIN = 0x0000;
 
@@ -19,6 +21,9 @@ export default class EntryAbility extends UIAbility {
   /** 窗口舞台引用，热启动推页时需要。 */
   private windowStage: window.WindowStage | undefined = undefined;
 
+  /** 实况窗「停止净化」事件的订阅句柄。 */
+  private purifySubscriber: commonEventManager.CommonEventSubscriber | undefined = undefined;
+
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     try {
       this.context.getApplicationContext().setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
@@ -31,6 +36,38 @@ export default class EntryAbility extends UIAbility {
       CardIntent.set(this.cardControl);
     }
     hilog.info(DOMAIN, 'testTag', 'Ability onCreate');
+    this.subscribePurifyStop();
+  }
+
+  /**
+   * 订阅实况窗「停止净化」事件。
+   *
+   * 实况窗上的按钮用 WantAgent 发这个公共事件，
+   * 应用进程收到后静默执行关闭 —— 不拉起任何界面。
+   */
+  private subscribePurifyStop(): void {
+    if (this.purifySubscriber !== undefined) {
+      return;
+    }
+    try {
+      const info: commonEventManager.CommonEventSubscribeInfo = {
+        events: [LiveViewData.STOP_EVENT],
+        publisherBundleName: this.context.abilityInfo.bundleName
+      };
+      const subscriber = commonEventManager.createSubscriberSync(info);
+      commonEventManager.subscribeToEvent(subscriber, (data: commonEventManager.CommonEventData) => {
+        hilog.info(DOMAIN, 'testTag', '收到实况窗停止净化事件');
+        PurifyCommand.stop(this.context as common.UIAbilityContext).catch((err: Error) => {
+          hilog.error(DOMAIN, 'testTag', '停止净化失败. Cause: %{public}s', err.message);
+        });
+      }).catch((err: BusinessError) => {
+        hilog.error(DOMAIN, 'testTag', '订阅停止净化事件失败. Cause: %{public}s', err.message);
+      });
+      this.purifySubscriber = subscriber;
+    } catch (err) {
+      const e = err as BusinessError;
+      hilog.error(DOMAIN, 'testTag', '订阅停止净化事件异常. Cause: %{public}s', e.message);
+    }
   }
 
   onDestroy(): void {
