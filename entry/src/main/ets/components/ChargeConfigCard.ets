@@ -188,14 +188,12 @@ export struct ChargeConfigCard {
   /**
    * 保存按钮的背景色。
    *
-   * 按下态用更深的一档颜色，让「按下去」这件事在手指接触的瞬间就可见；
-   * 置灰态（与车端一致）按下的颜色变化也更浅，避免看起来仍可点击。
+   * 按下态用更深的一档颜色，让「按下去」这件事在手指接触的瞬间就可见。
+   * 置灰态（与车端一致）不响应触摸，按下态颜色不会出现。
    */
   private saveButtonColor(): ResourceColor {
     if (!this.dirty()) {
-      return this.savePressed
-        ? $r('app.color.app_surface_sunken_pressed')
-        : $r('app.color.app_surface_sunken');
+      return $r('app.color.app_surface_sunken');
     }
     return this.savePressed
       ? $r('app.color.app_accent_pressed')
@@ -208,8 +206,14 @@ export struct ChargeConfigCard {
    * Down 立即置按压态，Up / Cancel 复位。
    * 手指划出按钮范围时上报的是 Cancel —— 一样要复位，
    * 否则按钮会一直停在按下色。
+   *
+   * 置灰态不参与按压 —— 没有需要保存的内容，按下去也不该有反馈。
    */
   private handleSaveTouch(event: TouchEvent): void {
+    if (!this.dirty()) {
+      this.savePressed = false;
+      return;
+    }
     switch (event.type) {
       case TouchType.Down:
         this.savePressed = true;
