@@ -99,6 +99,8 @@ export struct Control {
   onWindowToggle?: () => void;
   /** 点击寻车按钮（action = honk / flash / honk-flash）。 */
   onFindCarAction?: (action: string) => void;
+  /** 寻车按钮的瞬时高亮动作标识，为空表示不高亮。 */
+  @Prop findCarFlashAction: string = '';
   /** 点击退出登录。 */
   onLogout?: () => void;
 
@@ -253,6 +255,7 @@ export struct Control {
 
         // ---------- 寻车 ----------
         FindCarCard({
+          flashAction: this.findCarFlashAction,
           onAction: (action: string) => {
             if (this.onFindCarAction !== undefined) {
               this.onFindCarAction(action);

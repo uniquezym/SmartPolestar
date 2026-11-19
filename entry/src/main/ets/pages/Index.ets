@@ -42,6 +42,11 @@ interface StatusSegment {
 }
 
 /**
+ * 寻车按钮瞬时高亮的持续时长（毫秒）。
+ */
+const FIND_CAR_FLASH_MS: number = 1500;
+
+/**
  * 车辆状态总览页。
  *
  * 设计语言：Nordic Instrument —— 暖纸白底、发丝线分隔、表格数字、
@@ -344,6 +349,15 @@ struct Index {
   @State draftChargeTimerOn: boolean = false;
   @State draftChargeStartMinutes: number = -1;
   @State draftChargeStopMinutes: number = -1;
+  /**
+   * 寻车按钮的瞬时高亮动作标识。
+   *
+   * 只在指纹校验通过、指令下发成功后才点亮 —— 点击即高亮会让用户
+   * 以为指令已经发出，而指纹可能还没过。
+   */
+  @State findCarFlashAction: string = '';
+  /** 寻车高亮的清除定时器句柄。 */
+  private findCarFlashTimer: number = -1;
   /** 逐项健康告警文案，为空表示没有异常。 */
   @State healthWarnings: string[] = [];
   /**
@@ -637,6 +651,18 @@ struct Index {
     // 注意 onPageHide 不停它 —— 退到后台时状态流会断，
     // 守护是那时唯一能发现「空调停了」的手段。
     this.stopCampWatch();
+    this.clearFindCarFlash();
+  }
+
+  /**
+   * 清掉寻车按钮的瞬时高亮。
+   */
+  private clearFindCarFlash(): void {
+    if (this.findCarFlashTimer !== -1) {
+      clearTimeout(this.findCarFlashTimer);
+      this.findCarFlashTimer = -1;
+    }
+    this.findCarFlashAction = '';
   }
 
   /**
@@ -3318,17 +3344,53 @@ struct Index {
    *
    * 这三个动作没有可回读的状态，下发成功即提示用户，不做轮询确认。
    *
+   * **先过指纹门禁**：寻车会远程驱动车辆鸣笛 / 闪灯，属于高风险操作，
+   * 与整车解锁同级，指纹通过后才真正下发指令。
+   * 指纹不可用时降级为二次确认框（与卡片车控一致）。
+   *
    * @param action 动作标识（honk / flash / honk-flash）
    */
-  private async honkFlash(action: string): Promise<void> {
+  private honkFlash(action: string): void {
     if (!this.controlPrerequisites()) {
       return;
     }
+    this.guardByFingerprint(action, () => {
+      this.dispatchFindCar(action);
+    }, () => {
+      // 指纹未通过：不发送指令，按钮不高亮
+    });
+  }
+
+  /**
+   * 指纹通过后下发寻车指令。
+   *
+   * @param action 动作标识
+   */
+  private async dispatchFindCar(action: string): Promise<void> {
     const success = await this.executeAction(action);
     if (!success) {
       return;
     }
     this.toast(`${VehicleCommands.label(action)}指令已发送`);
+    this.flashFindCar(action);
+  }
+
+  /**
+   * 点亮寻车按钮的瞬时高亮。
+   *
+   * 高亮表示「指令已触发」，1.5 秒后自动退回。
+   *
+   * @param action 动作标识
+   */
+  private flashFindCar(action: string): void {
+    this.findCarFlashAction = action;
+    if (this.findCarFlashTimer !== -1) {
+      clearTimeout(this.findCarFlashTimer);
+    }
+    this.findCarFlashTimer = setTimeout(() => {
+      this.findCarFlashAction = '';
+      this.findCarFlashTimer = -1;
+    }, FIND_CAR_FLASH_MS);
   }
 
   /**
@@ -3547,6 +3609,15 @@ struct Index {
     if (action === VehicleCommands.ACTION_UNLOCK_TRUNK) {
       return '验证以解锁尾门';
     }
+    if (action === VehicleCommands.ACTION_HONK) {
+      return '验证以鸣笛寻车';
+    }
+    if (action === VehicleCommands.ACTION_FLASH) {
+      return '验证以闪灯寻车';
+    }
+    if (action === VehicleCommands.ACTION_HONK_FLASH) {
+      return '验证以鸣笛并闪灯';
+    }
     return '验证以打开车窗';
   }
 
@@ -3591,6 +3662,15 @@ struct Index {
     }
     if (action === VehicleCommands.ACTION_WINDOWS_OPEN) {
       return '打开全部车窗';
+    }
+    if (action === VehicleCommands.ACTION_HONK) {
+      return '鸣笛寻车';
+    }
+    if (action === VehicleCommands.ACTION_FLASH) {
+      return '闪灯寻车';
+    }
+    if (action === VehicleCommands.ACTION_HONK_FLASH) {
+      return '鸣笛并闪灯';
     }
     return action;
   }
@@ -4655,6 +4735,7 @@ struct Index {
           onFindCarAction: (action: string) => {
             this.honkFlash(action);
           },
+          findCarFlashAction: this.findCarFlashAction,
           onLogout: () => {
             this.logout();
           }

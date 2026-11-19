@@ -1,8 +1,5 @@
 import { AppIcon, AppIconName } from './Icons';
 
-/** 瞬时高亮时长（毫秒）。 */
-const FLASH_HIGHLIGHT_MS: number = 1500;
-
 /**
  * 寻车卡片。
  *
@@ -13,14 +10,22 @@ const FLASH_HIGHLIGHT_MS: number = 1500;
  *
  * 三个动作都是一次性的，没有状态回读 —— 下发成功即提示，不做轮询。
  * 按钮是「动作」不是「状态」，因此三个按钮样式一致，都不带选中态；
- * 点击后给一次短暂的品牌蓝高亮，表示「指令已触发」，1.5 秒后自动退回。
+ * 指令真正下发成功后给一次短暂的品牌蓝高亮，表示「指令已触发」。
+ *
+ * **指纹门禁**：寻车会远程驱动车辆鸣笛 / 闪灯，属于高风险操作，
+ * 指纹校验由上层（Index）完成 —— 指纹弹窗需要 UI 上下文，
+ * 卡片自己弹不了。因此高亮的触发时机也交给上层决定：
+ * 点击时只上报动作，校验通过且指令下发成功后才点亮高亮。
  */
 @Component
 export struct FindCarCard {
-  /** 最近一次触发的动作，用于瞬时高亮。 */
-  @State private flashedAction: string = '';
-  /** 高亮定时器句柄。 */
-  private flashTimer: number = -1;
+  /**
+   * 最近一次成功触发的动作，用于瞬时高亮。
+   *
+   * 由上层在指纹校验通过、指令下发成功后设置，
+   * 超时后清空（清空时机也在上层）。
+   */
+  @Prop flashAction: string = '';
 
   /**
    * 点击按钮。
@@ -28,35 +33,6 @@ export struct FindCarCard {
    * @param action 动作标识（honk / flash / honk-flash）
    */
   onAction?: (action: string) => void;
-
-  aboutToDisappear(): void {
-    this.clearFlash();
-  }
-
-  /**
-   * 触发瞬时高亮。
-   *
-   * 寻车没有「关闭」命令（协议里只有 HonkFlash 一个 RPC，
-   * 枚举只有鸣笛 / 闪灯 / 鸣笛并闪灯），所以按钮不能做成开关。
-   * 这里用一次短暂高亮来表达「指令已触发」。
-   *
-   * @param action 动作标识
-   */
-  private flash(action: string): void {
-    this.flashedAction = action;
-    this.clearFlash();
-    this.flashTimer = setTimeout(() => {
-      this.flashedAction = '';
-      this.flashTimer = -1;
-    }, FLASH_HIGHLIGHT_MS);
-  }
-
-  private clearFlash(): void {
-    if (this.flashTimer !== -1) {
-      clearTimeout(this.flashTimer);
-      this.flashTimer = -1;
-    }
-  }
 
   /**
    * 按钮。
@@ -75,13 +51,13 @@ export struct FindCarCard {
         AppIcon({
           name: icon,
           iconSize: 16,
-          color: this.flashedAction === action
+          color: this.flashAction === action
             ? $r('app.color.app_accent_text')
             : $r('app.color.app_primary_text')
         })
         Text(label)
           .fontSize(13)
-          .fontColor(this.flashedAction === action
+          .fontColor(this.flashAction === action
             ? $r('app.color.app_accent_text')
             : $r('app.color.app_primary_text'))
       }
@@ -94,12 +70,11 @@ export struct FindCarCard {
     .backgroundColor(Color.Transparent)
     .border({
       width: 1,
-      color: this.flashedAction === action
+      color: this.flashAction === action
         ? $r('app.color.app_accent')
         : $r('app.color.app_rule_strong')
     })
     .onClick(() => {
-      this.flash(action);
       if (this.onAction !== undefined) {
         this.onAction(action);
       }
