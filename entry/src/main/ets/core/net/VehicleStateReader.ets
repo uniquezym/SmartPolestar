@@ -336,11 +336,43 @@ export class VehicleStateReader {
   }
 
   /**
-   * 读取车辆健康状态。对应 ga0 的 health 分支。
+   * 读取车辆健康状态。
+   *
+   * **必须走服务端流 `GetHealth`，不能用一元快照 `GetLatestHealth`。**
+   *
+   * 快照只返回保养相关的少量字段（剩余天数 / 剩余里程 / 保养状态），
+   * 逐项告警（胎压、液位、12V 电压、灯组）压根不在响应里 ——
+   * 用快照读出来，这几项永远是「未知」。
+   *
+   * 对齐参考实现（Norr china.rs）：
+   *   "health" => ("/services.vehiclestates.health.HealthService/GetHealth", false, true)
+   * 第三个参数 true 表示「服务端流，取首帧即可」。
    */
   static async readHealth(client: GrpcClient, vin: string, state: VehicleState): Promise<void> {
-    const response = await client.callStatus(GrpcClient.SERVICE_HEALTH, 'GetLatestHealth', vin);
+    const response = await client.callStreamFirst(
+      GrpcClient.SERVICE_HEALTH, GrpcClient.STREAM_METHOD_HEALTH, vin,
+      VehicleStateReader.buildHealthRequest(vin));
     VehicleStateReader.applyHealth(response, state);
+  }
+
+  /**
+   * 构造健康状态请求体 —— 只带 field 2 = VIN。
+   *
+   * 对齐参考实现（Norr china.rs）：
+   *   } else if matches!(kind, "odometer" | "health" | "airQuality") {
+   *       wire::string(2, vin)
+   *   }
+   *
+   * 注意不是流式通用请求（field 1 = UUID + field 2 = VIN）——
+   * 健康服务的流式请求体同样只放 VIN。
+   */
+  private static buildHealthRequest(vin: string): Uint8Array {
+    const vinBytes = GrpcClient.utf8(vin);
+    const payload = new Uint8Array(vinBytes.length + 2);
+    payload[0] = 0x12; // field 2, wire type 2 (length-delimited)
+    payload[1] = vinBytes.length;
+    payload.set(vinBytes, 2);
+    return payload;
   }
 
   /**
@@ -358,7 +390,9 @@ export class VehicleStateReader {
     state.serviceRemainingDays = ProtoValue.asInteger(ProtoValue.get(fields, 3));
     state.serviceRemainingKm = ProtoValue.asInteger(ProtoValue.get(fields, 4));
 
-    // 健康总评需要扫描全部健康项：任一项 > 1 视为"需关注"，全部为 0 视为"良好"。
+    // 健康总评需要扫描全部健康项：任一项 > 1 视为"需关注"。
+    // 全部项都报了警（即每个枚举值都是 1=无告警）则是"良好"；
+    // 一个字段都没读到才叫"未知"。
     const healthFields = [5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
       26, 27, 28, 30, 31, 32, 33, 34, 35, 38];
     let hasAny = false;
@@ -372,7 +406,7 @@ export class VehicleStateReader {
         }
       }
     }
-    state.healthStatus = hasWarning ? '需关注' : (hasAny ? '未知' : '良好');
+    state.healthStatus = hasWarning ? '需关注' : (hasAny ? '良好' : '未知');
     state.healthWarnings = VehicleStateReader.parseHealthWarnings(fields, state);
 
     // 逐项枚举值 —— 详情页的健康卡片要按项显示状态，
@@ -396,6 +430,17 @@ export class VehicleStateReader {
         state.lightFaultCount++;
       }
     }
+
+    // 打印健康原始字段 —— 逐项告警有没有返回，看这一行就清楚。
+    const raw: string[] = [];
+    fields.forEach((value: number | Uint8Array, fieldNumber: number) => {
+      if (value instanceof Uint8Array) {
+        raw.push(`${fieldNumber}=bytes(${value.length})`);
+      } else {
+        raw.push(`${fieldNumber}=${value}`);
+      }
+    });
+    Log.info(`健康原始字段: ${raw.join(', ')}`);
 
     state.healthStateAt = Date.now();
   }

@@ -230,14 +230,26 @@ export struct HealthCard {
 
   /**
    * 分区标题。
+   *
+   * 标题上方带一条分隔线 —— 四个分区之间要有明确的视觉分界，
+   * 否则「保养 / 轮胎 / 液位与电气 / 外部灯光」读起来像一整块。
    */
   @Builder
-  sectionTitle(title: string) {
-    Text(title)
-      .fontSize(11)
-      .fontColor($r('app.color.app_tertiary_text'))
-      .width('100%')
-      .padding({ top: 13, bottom: 8 })
+  sectionTitle(title: string, first: boolean) {
+    Column() {
+      if (!first) {
+        Divider()
+          .color($r('app.color.app_rule'))
+          .strokeWidth(1)
+          .width('100%')
+      }
+      Text(title)
+        .fontSize(11)
+        .fontColor($r('app.color.app_tertiary_text'))
+        .width('100%')
+        .padding({ top: 13, bottom: 8 })
+    }
+    .width('100%')
   }
 
   /**
@@ -269,6 +281,9 @@ export struct HealthCard {
    * 单个轮位的胎压格。
    *
    * 只显示轮位名与状态 —— 车端被动式监测，不展示 kPa 数值。
+   *
+   * 宽度用 layoutWeight 而不是 width('100%') ——
+   * 在 Row 里写死 100% 会让两个格子各占满整行，第二列被挤出卡片。
    */
   @Builder
   tyreCell(index: number) {
@@ -283,7 +298,7 @@ export struct HealthCard {
         .fontSize(11.5)
         .fontColor(this.levelColor(this.tyreLevelAt(index)))
     }
-    .width('100%')
+    .layoutWeight(1)
     .alignItems(VerticalAlign.Center)
     .padding({ top: 10, bottom: 10, left: 10, right: 10 })
     .backgroundColor($r('app.color.app_surface_sunken'))
@@ -312,7 +327,7 @@ export struct HealthCard {
       .alignItems(VerticalAlign.Center)
 
       // ---------- 保养 ----------
-      this.sectionTitle('保养')
+      this.sectionTitle('保养', true)
 
       Row({ space: 10 }) {
         Column({ space: 4 }) {
@@ -361,7 +376,7 @@ export struct HealthCard {
       .padding({ top: 12, bottom: 2 })
 
       // ---------- 轮胎 ----------
-      this.sectionTitle('轮胎')
+      this.sectionTitle('轮胎', false)
 
       Row({ space: 10 }) {
         this.tyreCell(0)
@@ -377,7 +392,7 @@ export struct HealthCard {
       .margin({ top: 10 })
 
       // ---------- 液位与电气 ----------
-      this.sectionTitle('液位与电气')
+      this.sectionTitle('液位与电气', false)
 
       this.statusLine('制动液',
         this.levelText(this.fluidLevel(this.brakeFluidWarning), '正常', '偏低', '严重偏低'),
@@ -396,7 +411,7 @@ export struct HealthCard {
         this.batteryLevel(this.lowVoltageBatteryWarning), true)
 
       // ---------- 外部灯光 ----------
-      this.sectionTitle('外部灯光')
+      this.sectionTitle('外部灯光', false)
 
       Row() {
         Text('灯组状态')

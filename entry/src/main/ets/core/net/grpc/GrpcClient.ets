@@ -284,7 +284,8 @@ export class GrpcClient {
    * @param onDisconnect 流断开时回调（会尝试重连）
    * @param onFatal      流彻底不可用时回调
    * @param useLbs       是否走 LBS 主机（定位类接口走 LBS）
-   * @param vinOnly      请求体是否只带 VIN（dtlinternet 系接口用这种格式）
+   * @param vinOnly      请求体是否只带 field 1 = VIN（dtlinternet 系接口用这种格式）
+   * @param vinField2Only 请求体是否只带 field 2 = VIN（健康 / 里程 / 空气净化用这种格式）
    * @returns 取消订阅的函数
    */
   callStream(service: string, method: string, vin: string,
@@ -292,7 +293,8 @@ export class GrpcClient {
     onDisconnect: (message: string) => void,
     onFatal: (message: string) => void,
     useLbs: boolean = false,
-    vinOnly: boolean = false): () => void {
+    vinOnly: boolean = false,
+    vinField2Only: boolean = false): () => void {
     if (this.session === undefined) {
       onFatal('会话未初始化');
       return (): void => {};
@@ -323,7 +325,7 @@ export class GrpcClient {
       const token = session !== undefined ? session.accessToken : '';
 
       cancelCurrent = channel.callStream(fullMethod, token, vin,
-        vinOnly ? GrpcClient.buildVinOnlyRequest(vin) : GrpcClient.buildStreamRequest(vin),
+        GrpcClient.buildStreamPayload(vin, vinOnly, vinField2Only),
         (message: Uint8Array) => {
           // 收到数据说明流是活的，重置重试计数
           attempt = 0;
@@ -485,6 +487,37 @@ export class GrpcClient {
     payload[1] = vinBytes.length;
     payload.set(vinBytes, 2);
     return payload;
+  }
+
+  /**
+   * 构造只带 field 2 = VIN 的请求体。
+   *
+   * 健康 / 里程 / 空气净化这几个服务的流式请求体只用 VIN，
+   * 不带请求 UUID —— 对齐参考实现（Norr china.rs）：
+   *   } else if matches!(kind, "odometer" | "health" | "airQuality") {
+   *       wire::string(2, vin)
+   *   }
+   */
+  private static buildVinField2Request(vin: string): Uint8Array {
+    const vinBytes = GrpcClient.utf8(vin);
+    const payload = new Uint8Array(vinBytes.length + 2);
+    payload[0] = 0x12; // field 2, wire type 2
+    payload[1] = vinBytes.length;
+    payload.set(vinBytes, 2);
+    return payload;
+  }
+
+  /**
+   * 按服务类型选择流式请求体的格式。
+   */
+  private static buildStreamPayload(vin: string, vinOnly: boolean, vinField2Only: boolean): Uint8Array {
+    if (vinOnly) {
+      return GrpcClient.buildVinOnlyRequest(vin);
+    }
+    if (vinField2Only) {
+      return GrpcClient.buildVinField2Request(vin);
+    }
+    return GrpcClient.buildStreamRequest(vin);
   }
 
   /**

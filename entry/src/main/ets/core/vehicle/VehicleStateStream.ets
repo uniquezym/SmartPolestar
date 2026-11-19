@@ -24,6 +24,13 @@ interface StreamSpec {
   useLbs?: boolean;
   /** 请求体是否只带 VIN（dtlinternet 系接口用这种格式）。 */
   vinOnly?: boolean;
+  /**
+   * 请求体只带 field 2 = VIN（健康 / 里程 / 空气净化这几个服务用这种格式）。
+   *
+   * 与 `vinOnly` 的区别：`vinOnly` 是 field 1 = VIN（dtlinternet 系），
+   * 这里是 field 2 = VIN —— 字段号错了服务端会返回 PERMISSION_DENIED。
+   */
+  vinField2Only?: boolean;
 }
 
 /**
@@ -83,7 +90,9 @@ export class VehicleStateStream {
       service: GrpcClient.SERVICE_HEALTH,
       method: GrpcClient.STREAM_METHOD_HEALTH,
       apply: (response: Uint8Array, state: VehicleState) =>
-        VehicleStateReader.applyHealth(response, state)
+        VehicleStateReader.applyHealth(response, state),
+      // 健康服务的流式请求体只带 field 2 = VIN（对齐参考实现）。
+      vinField2Only: true
     },
     {
       // 最后停车位置。走 dtlinternet 服务 + LBS 主机，
@@ -161,7 +170,8 @@ export class VehicleStateStream {
           this.onStreamFatal?.(spec.domain, message);
         },
         spec.useLbs === true,
-        spec.vinOnly === true);
+        spec.vinOnly === true,
+        spec.vinField2Only === true);
       this.cancels.set(spec.domain, cancel);
     }
 

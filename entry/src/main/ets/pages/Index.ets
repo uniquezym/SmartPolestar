@@ -1548,6 +1548,21 @@ struct Index {
     copy.automaticAverageSpeedKph = state.automaticAverageSpeedKph;
     copy.sinceChargeAverageSpeedKph = state.sinceChargeAverageSpeedKph;
     copy.healthWarnings = state.healthWarnings.slice();
+    // 健康明细也要一并快照 —— 漏掉的话流式帧一到，
+    // 详情页的健康数据会被默认值冲掉（切后台再回来就空了）。
+    copy.healthStatus = state.healthStatus;
+    copy.maintenanceStatus = state.maintenanceStatus;
+    copy.maintenanceCode = state.maintenanceCode;
+    copy.serviceRemainingHours = state.serviceRemainingHours;
+    copy.serviceRemainingDays = state.serviceRemainingDays;
+    copy.serviceRemainingKm = state.serviceRemainingKm;
+    copy.brakeFluidWarning = state.brakeFluidWarning;
+    copy.coolantWarning = state.coolantWarning;
+    copy.washerFluidWarning = state.washerFluidWarning;
+    copy.lowVoltageBatteryWarning = state.lowVoltageBatteryWarning;
+    copy.tyreWarnings = state.tyreWarnings.slice();
+    copy.lightFaults = state.lightFaults.slice();
+    copy.lightFaultCount = state.lightFaultCount;
     copy.parkedLatitude = state.parkedLatitude;
     copy.parkedLongitude = state.parkedLongitude;
     copy.parkedTimestamp = state.parkedTimestamp;
