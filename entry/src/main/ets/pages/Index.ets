@@ -360,6 +360,30 @@ struct Index {
   private findCarFlashTimer: number = -1;
   /** 逐项健康告警文案，为空表示没有异常。 */
   @State healthWarnings: string[] = [];
+  /** 车辆整体健康总评：良好 / 需关注 / 未知。 */
+  @State healthStatus: string = '未知';
+  /** 保养状态文案。 */
+  @State maintenanceStatus: string = '未知';
+  /** 保养状态枚举值，供 UI 判颜色。 */
+  @State maintenanceCode: number = 0;
+  /** 距离下次保养的剩余天数，-1 表示未知。 */
+  @State serviceRemainingDays: number = -1;
+  /** 距离下次保养的剩余里程（km），-1 表示未知。 */
+  @State serviceRemainingKm: number = -1;
+  /** 制动液告警枚举值。 */
+  @State brakeFluidWarning: number = 0;
+  /** 冷却液告警枚举值。 */
+  @State coolantWarning: number = 0;
+  /** 玻璃水告警枚举值。 */
+  @State washerFluidWarning: number = 0;
+  /** 12V 蓄电池告警枚举值。 */
+  @State lowVoltageBatteryWarning: number = 0;
+  /** 四轮胎压告警枚举值，顺序：左前 / 右前 / 左后 / 右后。 */
+  @State tyreWarnings: number[] = [];
+  /** 外部灯光故障灯组数。 */
+  @State lightFaultCount: number = 0;
+  /** 外部灯光故障灯组名。 */
+  @State lightFaultNames: string[] = [];
   /**
    * 驻车空调剩余分钟数（本地倒计时）。
    *
@@ -1625,6 +1649,7 @@ struct Index {
         break;
       case 'health':
         this.healthWarnings = state.healthWarnings.slice();
+        this.applyHealthDetail(state);
         break;
       case 'location':
         this.applyStreamParkedLocation(state);
@@ -1993,6 +2018,33 @@ struct Index {
 
     // 健康告警：状态行最高优先级。
     this.healthWarnings = state.healthWarnings.slice();
+    this.applyHealthDetail(state);
+  }
+
+  /**
+   * 应用健康明细 —— 详情页的健康卡片要按项显示。
+   *
+   * 与概览页的状态行分开：状态行只关心「有没有异常」，
+   * 卡片关心每一项的具体状态。
+   */
+  private applyHealthDetail(state: VehicleState): void {
+    this.healthStatus = state.healthStatus;
+    this.maintenanceStatus = state.maintenanceStatus;
+    this.maintenanceCode = state.maintenanceCode;
+    this.serviceRemainingDays = state.serviceRemainingDays ?? -1;
+    this.serviceRemainingKm = state.serviceRemainingKm ?? -1;
+    this.brakeFluidWarning = state.brakeFluidWarning;
+    this.coolantWarning = state.coolantWarning;
+    this.washerFluidWarning = state.washerFluidWarning;
+    this.lowVoltageBatteryWarning = state.lowVoltageBatteryWarning;
+    this.tyreWarnings = state.tyreWarnings.slice();
+    this.lightFaultCount = state.lightFaultCount;
+    this.lightFaultNames = [];
+    for (const light of state.lightFaults) {
+      if (light.fault) {
+        this.lightFaultNames.push(light.name);
+      }
+    }
   }
 
   /**
@@ -4754,7 +4806,20 @@ struct Index {
         })
           .width('100%')
           .height('100%')
-        Detail()
+        Detail({
+          healthStatus: this.healthStatus,
+          maintenanceStatus: this.maintenanceStatus,
+          maintenanceCode: this.maintenanceCode,
+          serviceRemainingDays: this.serviceRemainingDays,
+          serviceRemainingKm: this.serviceRemainingKm,
+          brakeFluidWarning: this.brakeFluidWarning,
+          coolantWarning: this.coolantWarning,
+          washerFluidWarning: this.washerFluidWarning,
+          lowVoltageBatteryWarning: this.lowVoltageBatteryWarning,
+          tyreWarnings: this.tyreWarnings,
+          lightFaultCount: this.lightFaultCount,
+          lightFaultNames: this.lightFaultNames
+        })
           .width('100%')
           .height('100%')
       }

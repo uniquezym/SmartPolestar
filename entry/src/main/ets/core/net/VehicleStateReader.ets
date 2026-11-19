@@ -4,9 +4,21 @@ import { ProtoReader, ProtoValue } from '../proto/ProtoReader';
 import {
   VehicleState, CHARGING_LABELS, CHARGER_CONNECTION_LABELS, CHARGING_TYPE_LABELS,
   CHARGER_POWER_LABELS, CLIMATE_LABELS, CLIMATE_RUN_MODE_LABELS, LOCK_LABELS,
-  TAILGATE_LABELS, AIR_LABELS, MAINTENANCE_LABELS
+  TAILGATE_LABELS, AIR_LABELS, MAINTENANCE_LABELS, LightFault
 } from '../model/VehicleState';
 import { Log } from '../../common/Log';
+
+/**
+ * 灯组告警字段的描述。
+ *
+ * ArkTS 不允许用对象字面量当类型 —— 数组元素必须是显式声明的接口。
+ */
+interface LightGroupField {
+  /** 灯组显示名。 */
+  name: string;
+  /** 对应的协议字段号。 */
+  field: number;
+}
 
 /**
  * 单个状态域的读取任务。
@@ -339,6 +351,7 @@ export class VehicleStateReader {
 
     // 还原自 y90 的 health 分支：保养状态取 field 5，
     // 剩余工时/天数/里程分别取 field 2 / 3 / 4。
+    state.maintenanceCode = ProtoValue.asInteger(ProtoValue.get(fields, 5)) ?? 0;
     state.maintenanceStatus = VehicleState.enumLabel(
       ProtoValue.asInteger(ProtoValue.get(fields, 5)), MAINTENANCE_LABELS);
     state.serviceRemainingHours = ProtoValue.asInteger(ProtoValue.get(fields, 2));
@@ -361,7 +374,75 @@ export class VehicleStateReader {
     }
     state.healthStatus = hasWarning ? '需关注' : (hasAny ? '未知' : '良好');
     state.healthWarnings = VehicleStateReader.parseHealthWarnings(fields, state);
+
+    // 逐项枚举值 —— 详情页的健康卡片要按项显示状态，
+    // 不能只拿到一句汇总文案。
+    state.brakeFluidWarning = ProtoValue.asInteger(ProtoValue.get(fields, 6)) ?? 0;
+    state.coolantWarning = ProtoValue.asInteger(ProtoValue.get(fields, 7)) ?? 0;
+    state.washerFluidWarning = ProtoValue.asInteger(ProtoValue.get(fields, 13)) ?? 0;
+    state.lowVoltageBatteryWarning = ProtoValue.asInteger(ProtoValue.get(fields, 38)) ?? 0;
+
+    // 四轮胎压：field 9/10/11/12，顺序左前 / 右前 / 左后 / 右后。
+    state.tyreWarnings = [];
+    for (let i = 0; i < 4; i++) {
+      state.tyreWarnings.push(ProtoValue.asInteger(ProtoValue.get(fields, 9 + i)) ?? 0);
+    }
+
+    // 外部灯组故障。
+    state.lightFaults = VehicleStateReader.parseLightFaults(fields);
+    state.lightFaultCount = 0;
+    for (const light of state.lightFaults) {
+      if (light.fault) {
+        state.lightFaultCount++;
+      }
+    }
+
     state.healthStateAt = Date.now();
+  }
+
+  /**
+   * 解析外部灯组故障。
+   *
+   * 协议里每个灯组是一条独立的告警字段（14~35），
+   * ExteriorLightWarning：1=无告警 2=故障。
+   *
+   * 只取扁平字段 —— field 46 的 LightWarnings 子消息是同一批灯组的
+   * 「整体」告警，信息更粗，取扁平字段即可，不必再解一层子消息。
+   */
+  private static parseLightFaults(
+    fields: Map<number, number | Uint8Array>): LightFault[] {
+    const groups: LightGroupField[] = [
+      { name: '制动灯 左', field: 14 },
+      { name: '制动灯 中', field: 15 },
+      { name: '制动灯 右', field: 16 },
+      { name: '前雾灯', field: 17 },
+      { name: '后雾灯', field: 18 },
+      { name: '位置灯 左前', field: 19 },
+      { name: '位置灯 右前', field: 20 },
+      { name: '位置灯 左后', field: 21 },
+      { name: '位置灯 右后', field: 22 },
+      { name: '高位灯 左', field: 23 },
+      { name: '高位灯 右', field: 24 },
+      { name: '低位灯 左', field: 25 },
+      { name: '低位灯 右', field: 26 },
+      { name: '日间行车灯 左', field: 27 },
+      { name: '日间行车灯 右', field: 28 },
+      { name: '转向灯 左前', field: 30 },
+      { name: '转向灯 右前', field: 31 },
+      { name: '转向灯 左后', field: 32 },
+      { name: '转向灯 右后', field: 33 },
+      { name: '牌照灯', field: 34 },
+      { name: '侧标灯', field: 35 }
+    ];
+
+    const result: LightFault[] = [];
+    for (const group of groups) {
+      const value = ProtoValue.asInteger(ProtoValue.get(fields, group.field));
+      // 只有明确报 2（故障）才算故障；字段缺失说明车端没报这一项，
+      // 视为正常 —— 协议里「未指定」与「无告警」都不构成故障。
+      result.push({ name: group.name, fault: value === 2 });
+    }
+    return result;
   }
 
   /**

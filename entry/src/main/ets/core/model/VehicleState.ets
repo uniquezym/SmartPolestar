@@ -1,4 +1,17 @@
 /**
+ * 外部灯组故障项。
+ *
+ * 协议里每个灯组是一条独立的告警字段，没有聚合的总开关，
+ * 因此这里用「灯组名 + 是否故障」的列表表达。
+ */
+export interface LightFault {
+  /** 灯组名，如「高位灯 左」。 */
+  name: string;
+  /** 该灯组是否故障。 */
+  fault: boolean;
+}
+
+/**
  * 车辆聚合状态 —— 对应 Android 端 p000.fa0（74 字段）。
  *
  * 覆盖电池 / 充电 / 空调 / 车锁门窗 / 尾门 / 空气 / 里程能耗 / 健康 / 位置 / OTA 全部域。
@@ -145,9 +158,47 @@ export class VehicleState {
    */
   healthWarnings: string[] = [];
   maintenanceStatus: string = '未知';
+  /**
+   * 保养状态枚举值。
+   *
+   * 协议 ServiceWarning：1=正常 2=未知警告 3~5=将近 6~8=到期 9~11=逾期。
+   * 文案与枚举值并存 —— 文案给用户看，枚举值给 UI 判颜色。
+   */
+  maintenanceCode: number = 0;
   serviceRemainingHours: number | undefined = undefined;
   serviceRemainingDays: number | undefined = undefined;
   serviceRemainingKm: number | undefined = undefined;
+
+  // ---- 健康明细（逐项枚举值）----
+  /**
+   * 制动液液位告警枚举值。
+   *
+   * 协议 BrakeFluidLevelWarning：1=无告警 2=偏低 3=严重偏低。
+   */
+  brakeFluidWarning: number = 0;
+  /** 冷却液液位告警枚举值。1=无告警 2=偏低。 */
+  coolantWarning: number = 0;
+  /** 玻璃水液位告警枚举值。1=无告警 2=偏低。 */
+  washerFluidWarning: number = 0;
+  /** 12V 蓄电池告警枚举值。1=无告警 2=偏低。 */
+  lowVoltageBatteryWarning: number = 0;
+  /**
+   * 四轮胎压告警枚举值，顺序：左前 / 右前 / 左后 / 右后。
+   *
+   * 协议 TyrePressureWarning：1=无告警 2=很低 3=低 4=偏高。
+   * 车端是被动式监测 —— 只在异常时给告警，不持续上报实时胎压数值，
+   * 因此这里只存状态，不展示 kPa。
+   */
+  tyreWarnings: number[] = [];
+  /**
+   * 外部灯组故障明细。
+   *
+   * 每项是灯组名与故障标志（true = 该灯组故障）。
+   * 协议只有灯组告警，没有灯光的开关状态。
+   */
+  lightFaults: LightFault[] = [];
+  /** 外部灯光故障灯组数，0 表示无故障。 */
+  lightFaultCount: number = 0;
 
   // ---- 位置（最后停车位置） ----
   parkedLatitude: number | undefined = undefined;
