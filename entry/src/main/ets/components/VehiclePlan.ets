@@ -286,14 +286,16 @@ export struct VehiclePlan {
       // ---------- 车身线稿（Path 盒子为 px 尺寸，与路径坐标 1:1） ----------
       Stack({ alignContent: Alignment.TopStart }) {
         // 尾门板：车身尾部的半圆区域（y=254 分割线以下、到车尾弧线）。
-        // 填充色表达尾门锁状态，与车窗、车门同一套语言。
+        // 填充色表达尾门锁状态，与车门、车窗同一套语言 ——
+        // 开启态用品牌蓝（app_accent_soft 填充 + app_accent 描边）。
         // 画在车身轮廓之前 —— 否则填充会盖掉车身弧线的描边。
         // 上边界是已有的 M39 254h122 分隔线，底边与车身弧线重合。
-        // 必须显式 stroke(Transparent)：Path 默认描边是黑色，
+        // 未解锁时描边必须保持 Transparent：Path 默认描边是黑色，
         // 不关掉的话封闭路径的顶部横线会多出一道黑边。
         Path({ commands: 'M39 254 L161 254 C161 294 142 328 100 328 C58 328 39 298 39 254 Z' })
-          .fill(this.trunkUnlocked ? $r('app.color.app_trunk_open_fill') : Color.Transparent)
-          .stroke(Color.Transparent)
+          .fill(this.trunkUnlocked ? $r('app.color.app_accent_soft') : Color.Transparent)
+          .stroke(this.trunkUnlocked ? $r('app.color.app_accent') : Color.Transparent)
+          .strokeWidth(this.sw(1.4))
           .width(`${this.viewW}px`)
           .height(`${this.viewH}px`)
 
@@ -336,33 +338,34 @@ export struct VehiclePlan {
           .width(`${this.viewW}px`)
           .height(`${this.viewH}px`)
 
-        // 四窗：逐扇独立染色，开启时填充 + 描边都走警示色。
+        // 四窗：逐扇独立染色，开启时填充 + 描边都走品牌蓝，
+        // 与开启的车门、尾门同一套语言。
         // 描边必须一起换 —— 原来描边始终是车身色，深色模式下填充色
-        // （app_warn_soft = #2C2113）在 #0E0F10 底上几乎看不出来。
+        // （app_accent_soft = #16242F）在 #0E0F10 底上几乎看不出来。
         Path({ commands: 'M45,96 L98,96 L98,158 L45,158 Z' })
-          .fill(this.isOpen(this.windowStates, 0) ? $r('app.color.app_warn_soft') : Color.Transparent)
-          .stroke(this.isOpen(this.windowStates, 0) ? $r('app.color.app_warn') : $r('app.color.app_primary_text'))
+          .fill(this.isOpen(this.windowStates, 0) ? $r('app.color.app_accent_soft') : Color.Transparent)
+          .stroke(this.isOpen(this.windowStates, 0) ? $r('app.color.app_accent') : $r('app.color.app_primary_text'))
           .strokeWidth(this.sw(1.6))
           .strokeLineJoin(LineJoinStyle.Round)
           .width(`${this.viewW}px`)
           .height(`${this.viewH}px`)
         Path({ commands: 'M102,96 L155,96 L155,158 L102,158 Z' })
-          .fill(this.isOpen(this.windowStates, 1) ? $r('app.color.app_warn_soft') : Color.Transparent)
-          .stroke(this.isOpen(this.windowStates, 1) ? $r('app.color.app_warn') : $r('app.color.app_primary_text'))
+          .fill(this.isOpen(this.windowStates, 1) ? $r('app.color.app_accent_soft') : Color.Transparent)
+          .stroke(this.isOpen(this.windowStates, 1) ? $r('app.color.app_accent') : $r('app.color.app_primary_text'))
           .strokeWidth(this.sw(1.6))
           .strokeLineJoin(LineJoinStyle.Round)
           .width(`${this.viewW}px`)
           .height(`${this.viewH}px`)
         Path({ commands: 'M45,162 L98,162 L98,224 L45,224 Z' })
-          .fill(this.isOpen(this.windowStates, 2) ? $r('app.color.app_warn_soft') : Color.Transparent)
-          .stroke(this.isOpen(this.windowStates, 2) ? $r('app.color.app_warn') : $r('app.color.app_primary_text'))
+          .fill(this.isOpen(this.windowStates, 2) ? $r('app.color.app_accent_soft') : Color.Transparent)
+          .stroke(this.isOpen(this.windowStates, 2) ? $r('app.color.app_accent') : $r('app.color.app_primary_text'))
           .strokeWidth(this.sw(1.6))
           .strokeLineJoin(LineJoinStyle.Round)
           .width(`${this.viewW}px`)
           .height(`${this.viewH}px`)
         Path({ commands: 'M102,162 L155,162 L155,224 L102,224 Z' })
-          .fill(this.isOpen(this.windowStates, 3) ? $r('app.color.app_warn_soft') : Color.Transparent)
-          .stroke(this.isOpen(this.windowStates, 3) ? $r('app.color.app_warn') : $r('app.color.app_primary_text'))
+          .fill(this.isOpen(this.windowStates, 3) ? $r('app.color.app_accent_soft') : Color.Transparent)
+          .stroke(this.isOpen(this.windowStates, 3) ? $r('app.color.app_accent') : $r('app.color.app_primary_text'))
           .strokeWidth(this.sw(1.6))
           .strokeLineJoin(LineJoinStyle.Round)
           .width(`${this.viewW}px`)
@@ -509,7 +512,7 @@ export struct VehiclePlan {
           AppIcon({
             name: AppIconName.LOCK_OPEN,
             iconSize: 13,
-            color: $r('app.color.app_trunk_open_stroke')
+            color: $r('app.color.app_accent')
           })
         }
       }
