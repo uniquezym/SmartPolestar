@@ -1850,9 +1850,16 @@ struct Index {
       });
       return;
     }
-    LiveViewManager.update(context, this.airLiveData()).catch((err: Error) => {
-      Log.warn(`更新空气净化实况窗失败: ${err.message}`);
-    });
+    LiveViewManager.update(context, this.airLiveData())
+      .then((alive: boolean) => {
+        // 实况窗没了（建窗失败过、或已被系统清理）—— 补建一个
+        if (!alive) {
+          this.startAirLiveView();
+        }
+      })
+      .catch((err: Error) => {
+        Log.warn(`更新空气净化实况窗失败: ${err.message}`);
+      });
   }
 
   /**

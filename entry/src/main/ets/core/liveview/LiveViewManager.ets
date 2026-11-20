@@ -88,6 +88,11 @@ export class LiveViewManager {
       Log.info(`空气净化实况窗已创建: id=${LiveViewManager.LIVE_VIEW_ID}`);
     } catch (err) {
       const e = err as BusinessError;
+      if (e.code === 1003500005) {
+        // 权益未开通 —— 华为侧没给本应用开实况窗权限，代码无法绕过
+        Log.warn('实况窗权益未开通：请在 AppGallery Connect 申请实况窗服务权益，或添加调测设备');
+        return;
+      }
       Log.warn(`创建空气净化实况窗失败: code=${e.code} ${e.message}`);
     }
   }
@@ -95,24 +100,33 @@ export class LiveViewManager {
   /**
    * 更新实况窗内容。
    *
-   * 没有实况窗时直接返回 —— 更新是尽力而为的，
-   * 拿不到就等下一次状态变化再试。
-   *
    * @param context UIAbility 上下文
    * @param data    要展示的数据
+   * @returns 实况窗是否仍然存在
+   *          false 表示它已被删除或从未建成，调用方需要重新创建
    */
-  static async update(context: common.UIAbilityContext, data: AirPurifyLiveData): Promise<void> {
+  static async update(context: common.UIAbilityContext,
+    data: AirPurifyLiveData): Promise<boolean> {
     if (!await LiveViewManager.isAvailable()) {
-      return;
+      return false;
     }
     try {
       const view = await LiveViewManager.buildLiveView(context, data);
       await liveViewManager.updateLiveView(view);
+      return true;
     } catch (err) {
       const e = err as BusinessError;
-      if (e.code !== 1003500009 && e.code !== 1003500010) {
-        Log.warn(`更新空气净化实况窗失败: code=${e.code} ${e.message}`);
+      if (e.code === 1003500009) {
+        // 实况窗不存在 —— 上一次建窗可能失败或已被删除，需要重新创建
+        Log.info('空气净化实况窗不存在，将重新创建');
+        return false;
       }
+      if (e.code === 1003500010) {
+        // 已结束 —— 同样需要重建
+        return false;
+      }
+      Log.warn(`更新空气净化实况窗失败: code=${e.code} ${e.message}`);
+      return true;
     }
   }
 
