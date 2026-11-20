@@ -29,12 +29,19 @@ export class LiveViewData {
    * 实况窗事件标识 —— 同一业务用同一个 event，系统据此归类。
    *
    * 只能用官方白名单里的场景值，否则会被判为不合规场景。
-   * 空气净化属于「用户主动开启、带时长的计时型任务」，对应 TIMER。
+   *
+   * 选 RENT（共享租赁）而不是 TIMER（计时）：
+   *   官方对 TIMER 的适用范围写得很窄 ——
+   *   「适用于专注时刻、番茄时钟，仅限工具类应用申请」，
+   *   不适用案例里直接列了取餐计时提醒、课程提醒、正计时等。
+   *   空气净化是车机设备运行，不是专注时钟，不符合 TIMER 的准入。
+   *   RENT 的适用范围里明确包含「汽车快充充电」——
+   *   车载设备按时长运行、用户主动开启、需要看剩余时长，正是这个形态。
    */
-  static readonly EVENT_NAME: string = 'TIMER';
+  static readonly EVENT_NAME: string = 'RENT';
 
-  /** 卡片标题。 */
-  static readonly TITLE: string = '空气净化';
+  /** 卡片标题。带上「中」字表达运行态 —— 辅助区被停止按钮占用了，状态词得放这里。 */
+  static readonly TITLE: string = '空气净化中';
 
   /** 运行态标签。 */
   static readonly RUNNING_LABEL: string = '净化中';

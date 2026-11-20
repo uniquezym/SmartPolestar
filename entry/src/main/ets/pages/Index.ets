@@ -105,6 +105,21 @@ struct Index {
   private static readonly LOCATION_POLL_INTERVAL_MS: number = 5 * 60 * 1000;
 
   /**
+   * 实况窗心跳的间隔（毫秒）。
+   *
+   * 官方实况窗约束：
+   *   - 超过 2 小时未更新 → 状态栏胶囊和锁屏胶囊被隐藏，只剩通知中心
+   *   - 超过 4 小时未更新 → 系统判定实况窗已结束，从所有入口清除
+   *
+   * 实况窗主要在「应用切到后台」时可见，而后台时长不可控 ——
+   * 用户可能开着一两小时的净化。所以必须有独立于车端推送的心跳，
+   * 定期刷新实况窗内容，避免胶囊被系统悄悄收掉。
+   *
+   * 取 30 分钟：远小于 2 小时的阈值，又不至于频繁唤醒。
+   */
+  private static readonly AIR_LIVE_HEARTBEAT_MS: number = 30 * 60 * 1000;
+
+  /**
    * 空调 / 净化状态检查的兜底间隔，同时也是检查间隔的上限（毫秒）。
    *
    * 这两项都会到时自动停机：驻车空调与空气净化跑到设定时长后车端自动
@@ -518,6 +533,8 @@ struct Index {
   private climateEndgameCount: number = 0;
   /** 连续多少次状态检查失败。失败时要退避，不能一直高频重试。 */
   private climateFailCount: number = 0;
+  /** 实况窗心跳定时器句柄（单次延时，不是周期）。 */
+  private airLiveTimer: number = -1;
 
   /**
    * 状态流是否已建立订阅。
@@ -681,6 +698,10 @@ struct Index {
     this.stopClimateTimer();
     this.stopLocationTimer();
     this.stopVehicleStream();
+    // 页面销毁 → 实况窗心跳一并停掉。
+    // 注意 onPageHide 不停它 —— 实况窗本来就是在退到后台后才被看到的，
+    // 心跳必须跟着页面活着，才能刷新实况窗、避免被系统按未更新时间收掉。
+    this.clearAirLiveHeartbeat();
     // 页面销毁 → 露营守护一并停掉。
     // 注意 onPageHide 不停它 —— 退到后台时状态流会断，
     // 守护是那时唯一能发现「空调停了」的手段。
@@ -1450,6 +1471,7 @@ struct Index {
     this.stopClimateTimer();
     this.stopLocationTimer();
     this.stopVehicleStream();
+    this.clearAirLiveHeartbeat();
     // 退出登录 → 实况窗也要拆掉，不能让控制入口留在系统层
     const context = this.context;
     if (context !== undefined) {
@@ -1818,18 +1840,25 @@ struct Index {
         await this.startAirLiveView();
       } else {
         this.syncAirLiveView();
+        // 走的是「实况窗还在」的分支，不会经过 startAirLiveView，
+        // 心跳得在这里补排一次
+        this.scheduleAirLiveHeartbeat();
       }
     }
   }
 
   /**
    * 空气净化实况窗的当前数据。
+   *
+   * 剩余时间取本地推算值（airCountdownMinutes）而不是车端原值 ——
+   * 车端只在状态推送里给剩余时长，推送间隔不固定（有时几分钟才一帧），
+   * 直接用车端值会看到数字卡住不动。
    */
   private airLiveData(): AirPurifyLiveData {
     return {
       aqi: this.airQualityIndex,
       pm25: this.pm25UgM3,
-      remainingMinutes: this.airRemainingMinutes
+      remainingMinutes: this.airCountdownMinutes
     };
   }
 
@@ -1845,6 +1874,8 @@ struct Index {
       return;
     }
     if (!this.airActive()) {
+      // 净化已停 —— 心跳没有存在意义了
+      this.clearAirLiveHeartbeat();
       LiveViewManager.stop(context as common.UIAbilityContext).catch((err: Error) => {
         Log.warn(`销毁空气净化实况窗失败: ${err.message}`);
       });
@@ -1874,6 +1905,73 @@ struct Index {
     // 实况窗的「停止净化」按钮靠进程内公共事件执行 ——
     // 进程被杀了按钮就点不动，所以净化期间要申请长时任务保活。
     await BackgroundKeeper.start(context as common.UIAbilityContext);
+    this.scheduleAirLiveHeartbeat();
+  }
+
+  /**
+   * 安排下一次实况窗心跳。
+   *
+   * 心跳的作用是「刷新实况窗」，防止系统按未更新时间把它收掉：
+   * 官方规则是超 2 小时未更新就隐藏胶囊、超 4 小时就判定结束。
+   * 车端推送不是可靠来源 —— 净化期间可能很久不推，
+   * 而且切后台后长连接会被系统回收，推送彻底停了。
+   */
+  private scheduleAirLiveHeartbeat(): void {
+    this.clearAirLiveHeartbeat();
+    if (!this.airActive()) {
+      return;
+    }
+    this.airLiveTimer = setTimeout(() => {
+      this.airLiveTimer = -1;
+      this.onAirLiveHeartbeat();
+    }, Index.AIR_LIVE_HEARTBEAT_MS);
+  }
+
+  /**
+   * 取消已安排的实况窗心跳。
+   */
+  private clearAirLiveHeartbeat(): void {
+    if (this.airLiveTimer !== -1) {
+      clearTimeout(this.airLiveTimer);
+      this.airLiveTimer = -1;
+    }
+  }
+
+  /**
+   * 实况窗心跳 —— 刷新内容并重新排下一次。
+   *
+   * 顺带读一次车端状态：车端到时自动停机后，推送可能不再来，
+   * 只有主动读一次才能发现「已经关了」，把实况窗收掉。
+   */
+  private async onAirLiveHeartbeat(): Promise<void> {
+    const context = this.context;
+    if (context === undefined) {
+      return;
+    }
+    if (this.repository !== undefined && this.vin.length > 0) {
+      try {
+        const airState = await this.repository.readDomain('air', this.vin);
+        if (airState.air === '关闭') {
+          this.airPhase = TogglePhase.OFF;
+          this.publishCard();
+        }
+        this.airRemainingMinutes = airState.airRuntimeMinutes ?? -1;
+        if (airState.airQualityIndex !== undefined) {
+          this.airQualityIndex = airState.airQualityIndex;
+        }
+        if (airState.pm25UgM3 !== undefined) {
+          this.pm25UgM3 = airState.pm25UgM3;
+        }
+        this.syncCountdownAnchors();
+        this.tickCountdowns();
+      } catch (err) {
+        // 读失败不算异常 —— 心跳的重点是刷新实况窗，读状态只是顺带。
+        Log.warn(`实况窗心跳读取净化状态失败: ${(err as Error).message}`);
+      }
+    }
+    // 净化已停 → syncAirLiveView 会销毁实况窗，并停掉心跳
+    this.syncAirLiveView();
+    this.scheduleAirLiveHeartbeat();
   }
 
   /**

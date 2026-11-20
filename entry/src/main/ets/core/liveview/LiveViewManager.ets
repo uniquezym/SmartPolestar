@@ -21,6 +21,14 @@ export class LiveViewManager {
   private static enabled: boolean | undefined = undefined;
 
   /**
+   * 实况窗顺序号。
+   *
+   * 官方示例 start 用 1、update 用 2，同一生命周期内严格递增；
+   * 顺序不对会报 1003500011（实况窗顺序不正确）。
+   */
+  private static sequence: number = 0;
+
+  /**
    * 实况窗是否可用。
    *
    * LiveView 能力需要华为侧开通，未开通时 isLiveViewEnabled 返回 false ——
@@ -142,7 +150,8 @@ export class LiveViewManager {
     try {
       // stopLiveView 只需要 id 与 event，
       // 但接口签名要求完整的 LiveView —— 这里用空数据把其余字段填上。
-      const view = await LiveViewManager.buildLiveView(context, LiveViewData.EMPTY_DATA);
+      // 不推进 sequence —— 结束不是一次「更新」，沿用上次的顺序号即可。
+      const view = await LiveViewManager.buildLiveView(context, LiveViewData.EMPTY_DATA, false);
       await liveViewManager.stopLiveView(view);
       Log.info(`空气净化实况窗已销毁: id=${LiveViewManager.LIVE_VIEW_ID}`);
     } catch (err) {
@@ -177,9 +186,8 @@ export class LiveViewManager {
    * 组装实况窗数据。
    *
    * 卡片态分三块：
-   *   固定区 —— 标题「空气净化」+ 内容（AQI / PM2.5 / 剩余时间）
-   *   辅助区 —— extensionData，「净化中」状态词
-   *   扩展区 —— layoutData.serviceButtons，「停止净化」按钮
+   *   固定区 —— 标题「空气净化中」+ 内容（AQI / PM2.5 / 剩余时间）
+   *   辅助区 —— extensionData，拓展按钮位（停止净化）
    * 胶囊态：
    *   capsule —— 「净化中」+ 剩余分钟数
    *
@@ -189,11 +197,25 @@ export class LiveViewManager {
    * （The type of primary.xxx must be ...）。
    * 这三项是链式校验 —— 补上前一个才会报出下一个。
    *
-   * 【serviceButtons 才是「停止净化」的落点】
-   * 它挂在 LayoutData 上，渲染在辅助区的拓展按钮位。
+   * 【extensionData.clickAction 与 serviceButtons 必须同时给】
+   * 官方对 serviceButtons 的说明是：
+   * 「更新连续服务按钮时，需要同时更新辅助区 ExtensionData 的 clickAction 字段
+   *   和连续服务按钮。」
+   * 也就是说辅助区的点击动作由 extensionData.clickAction 承载，
+   * serviceButtons 只是这一块的按钮外观 —— 两者必须成对出现。
+   *
+   * 【sequence】
+   * 官方示例 start 用 1、update 用 2，对应错误码 1003500011
+   * （实况窗顺序不正确）。创建与更新都递增，结束则沿用上一次的值
+   * —— 官方说未携带的可选字段会继承上一次的状态。
+   *
+   * @param context      UIAbility 上下文
+   * @param data         要展示的数据
+   * @param bumpSequence 是否推进顺序号（创建/更新为 true，结束为 false）
    */
   private static async buildLiveView(context: common.UIAbilityContext,
-    data: AirPurifyLiveData): Promise<liveViewManager.LiveView> {
+    data: AirPurifyLiveData, bumpSequence: boolean = true): Promise<liveViewManager.LiveView> {
+    const stopAgent = await LiveViewManager.buildStopAgent(context);
     const primary: liveViewManager.PrimaryData = {
       title: LiveViewData.TITLE,
       content: [
@@ -205,18 +227,23 @@ export class LiveViewManager {
       keepTime: 0,
       // 卡片主体的默认动作：回到应用看详情
       clickAction: await LiveViewManager.buildOpenAgent(context),
-      // 辅助区：状态词
+      // 辅助区：拓展按钮位（停止净化）
+      // 文字用按钮文案而不是状态词 —— extensionData.clickAction 与
+      // serviceButtons 是同一处动作，点辅助区任何位置都是「停止净化」，
+      // 写「净化中」会让人以为点状态词只是看详情。
       extensionData: {
-        text: LiveViewData.RUNNING_LABEL,
-        type: liveViewManager.ExtensionType.EXTENSION_TYPE_COMMON_TEXT
+        text: LiveViewData.STOP_LABEL,
+        type: liveViewManager.ExtensionType.EXTENSION_TYPE_COMMON_TEXT,
+        clickAction: stopAgent
       },
-      // 扩展区：唯一带动作的地方 —— 「停止净化」
+      // 扩展区：与辅助区拓展按钮位同一处动作，
+      // 官方要求 serviceButtons 与 extensionData.clickAction 同时更新
       layoutData: {
         layoutType: liveViewManager.LayoutType.LAYOUT_TYPE_DEFAULT,
         serviceButtons: [
           {
             name: LiveViewData.STOP_LABEL,
-            clickAction: await LiveViewManager.buildStopAgent(context)
+            clickAction: stopAgent
           }
         ],
         isServiceButtonsDisplayed: true
@@ -225,6 +252,7 @@ export class LiveViewManager {
     return {
       id: LiveViewManager.LIVE_VIEW_ID,
       event: LiveViewData.EVENT_NAME,
+      sequence: bumpSequence ? LiveViewManager.nextSequence() : LiveViewManager.sequence,
       isMute: true,
       liveViewData: {
         primary: primary,
@@ -238,6 +266,17 @@ export class LiveViewManager {
         }
       }
     };
+  }
+
+  /**
+   * 取下一个 sequence 值。
+   *
+   * 官方对 sequence 的用法是 start=1、update=2 逐次递增，
+   * 顺序不对会报 1003500011。
+   */
+  private static nextSequence(): number {
+    LiveViewManager.sequence += 1;
+    return LiveViewManager.sequence;
   }
 
   /**
