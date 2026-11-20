@@ -45,8 +45,11 @@ export struct VehiclePlan {
    *
    * 原版 Android 车模没有充电指示（g10 只画「充电口打开」橙色标签），
    * 这里沿用车模既有的标记点语言，把充电状态交给同一个标记点表达。
+   *
+   * 呼吸动效挂在 `chargePulsing` 上，不用这个属性做触发 ——
+   * 插上枪时它就变成 true，而真正开始充电是另一个信号。
    */
-  @Prop @Watch('onChargingChanged') charging: boolean = false;
+  @Prop charging: boolean = false;
   /**
    * 充电标记点的强调色 —— 随充电阶段变化（充电中蓝 / 已完成绿 / 故障红）。
    */
@@ -55,8 +58,14 @@ export struct VehiclePlan {
    * 充电标记点是否呼吸 —— 只有真正在充电时才呼吸。
    *
    * 之前把「已连接」直接当成充电中，导致充满之后光环还在转。
+   *
+   * **这个属性必须自己带 @Watch**：它跟 `charging` 是两个独立变化的信号。
+   * `charging` 表示「充电口有标记点」（插上枪就是 true），
+   * `chargePulsing` 表示「真正在充电」——
+   * 从插枪到开始充电，`charging` 一直是 true 没变过，
+   * 挂在它上面的 Watch 不会触发，呼吸动画也就永远启动不了。
    */
-  @Prop chargePulsing: boolean = false;
+  @Prop @Watch('onChargePulsingChanged') chargePulsing: boolean = false;
   /** 尾门解锁 —— 尾门标记点显示警示色。 */
   @Prop trunkUnlocked: boolean = false;
   /** 尾门指令执行中 —— 标记点显示蓝色描边与旋转指示器。 */
@@ -105,7 +114,6 @@ export struct VehiclePlan {
       this.startPulse();
     } else {
       this.stopPulse();
-      this.chargePulse = 0;
     }
   }
 
@@ -119,6 +127,9 @@ export struct VehiclePlan {
     if (this.pulseTimer !== -1) {
       return;
     }
+    // 每次启动都从收缩相位开始 —— 上一轮停止时可能停在扩散相位，
+    // 直接续跑会让光环从一个随机半径开始跳。
+    this.chargePulse = 0;
     this.pulseTimer = setInterval(() => {
       this.chargePulse = this.chargePulse === 0 ? 1 : 0;
     }, 1100);
@@ -132,14 +143,19 @@ export struct VehiclePlan {
       clearInterval(this.pulseTimer);
       this.pulseTimer = -1;
     }
+    // 相位复位 —— 下次启动从收缩态开始，不会续跳上一轮的半径。
+    this.chargePulse = 0;
   }
 
   /**
-   * 充电标记状态变化时启停动效。
+   * 呼吸状态变化时启停动效。
    *
-   * 呼吸只跟随 chargePulsing（真正在充电），不是跟随 charging（插着枪）。
+   * 挂在 `chargePulsing` 上，而不是 `charging` ——
+   * `charging` 表达的是「充电口有标记点」，插上枪就为 true；
+   * 真正开始充电是 `chargePulsing` 由 false 变 true 的那一刻，
+   * 此时 `charging` 没有变化，靠它的 Watch 启停动效会漏掉。
    */
-  private onChargingChanged(): void {
+  private onChargePulsingChanged(): void {
     this.syncPulse();
   }
 
