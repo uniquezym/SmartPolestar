@@ -217,8 +217,10 @@ export class LiveViewManager {
         capsule: {
           type: liveViewManager.CapsuleType.CAPSULE_TYPE_TEXT,
           status: 1,
+          icon: LiveViewData.CAPSULE_ICON,
           title: LiveViewData.RUNNING_LABEL,
-          content: LiveViewData.capsuleText(data)
+          content: LiveViewData.capsuleText(data),
+          backgroundColor: LiveViewData.CAPSULE_BACKGROUND
         }
       }
     };

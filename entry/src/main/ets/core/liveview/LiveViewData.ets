@@ -57,6 +57,17 @@ export class LiveViewData {
    */
   static readonly ABILITY_NAME: string = 'EntryAbility';
 
+  /**
+   * 胶囊态图标。
+   *
+   * 取 /resources/rawfile 下的文件名 —— 胶囊图标是必填项，
+   * 少了会报 401（The type of capsule.icon must be string | image.PixelMap）。
+   */
+  static readonly CAPSULE_ICON: string = 'liveview_air_icon.png';
+
+  /** 胶囊底色 —— 用品牌深蓝，与应用主色一致。 */
+  static readonly CAPSULE_BACKGROUND: string = '#FF003057';
+
   /** 空数据 —— 停止实况窗时不需要真实内容。 */
   static readonly EMPTY_DATA: AirPurifyLiveData = {
     aqi: -1,
