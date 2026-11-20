@@ -162,25 +162,24 @@ export class LiveViewManager {
   /**
    * 组装实况窗数据。
    *
-   * 卡片态分两块：
-   *   固定区 —— 标题「空气净化中」+ 内容（AQI / PM2.5 / 剩余时间）
-   *   辅助区 —— extensionData，「停止净化」按钮
+   * 卡片态分三块：
+   *   固定区 —— 标题「空气净化」+ 内容（AQI / PM2.5 / 剩余时间）
+   *   辅助区 —— extensionData，「净化中」状态词
+   *   扩展区 —— layoutData.serviceButtons，「停止净化」按钮
    * 胶囊态：
    *   capsule —— 「净化中」+ 剩余分钟数
    *
-   * 【primary.clickAction 是必填项】
-   * 少了它 startLiveView 会直接报 401
-   * （The type of primary.clickAction must be WantAgent）。
-   * 这里让它把用户带回应用看详情 —— 与「停止净化」分开。
+   * 【primary 的三个必填项】
+   * clickAction、extensionData、layoutData 缺一不可，
+   * 少了任何一个 startLiveView 都会报 401
+   * （The type of primary.xxx must be ...）。
+   * 这三项是链式校验 —— 补上前一个才会报出下一个。
    *
-   * 【不放 layoutData】
-   * LAYOUT_TYPE_DEFAULT 本身就不渲染扩展区，
-   * 挂 serviceButtons 没有意义，却会引入额外的参数校验风险。
-   * 「停止净化」放辅助区的拓展按钮位，是官方规范推荐的位置。
+   * 【serviceButtons 才是「停止净化」的落点】
+   * 它挂在 LayoutData 上，渲染在辅助区的拓展按钮位。
    */
   private static async buildLiveView(context: common.UIAbilityContext,
     data: AirPurifyLiveData): Promise<liveViewManager.LiveView> {
-    const stopAgent = await LiveViewManager.buildStopAgent(context);
     const primary: liveViewManager.PrimaryData = {
       title: LiveViewData.TITLE,
       content: [
@@ -192,11 +191,21 @@ export class LiveViewManager {
       keepTime: 0,
       // 卡片主体的默认动作：回到应用看详情
       clickAction: await LiveViewManager.buildOpenAgent(context),
-      // 辅助区：「停止净化」快捷操作
+      // 辅助区：状态词
       extensionData: {
-        text: LiveViewData.STOP_LABEL,
-        type: liveViewManager.ExtensionType.EXTENSION_TYPE_COMMON_TEXT,
-        clickAction: stopAgent
+        text: LiveViewData.RUNNING_LABEL,
+        type: liveViewManager.ExtensionType.EXTENSION_TYPE_COMMON_TEXT
+      },
+      // 扩展区：唯一带动作的地方 —— 「停止净化」
+      layoutData: {
+        layoutType: liveViewManager.LayoutType.LAYOUT_TYPE_DEFAULT,
+        serviceButtons: [
+          {
+            name: LiveViewData.STOP_LABEL,
+            clickAction: await LiveViewManager.buildStopAgent(context)
+          }
+        ],
+        isServiceButtonsDisplayed: true
       }
     };
     return {
