@@ -47,14 +47,14 @@ export struct TemperaturePicker {
       ForEach(this.levels(), (level: number) => {
         Row() {
           Text(`${level}°`)
-            .fontSize(15)
+            .fontSize(13)
             .fontWeight(FontWeight.Medium)
             .fontColor(level === this.celsius
               ? $r('app.color.app_on_accent')
               : $r('app.color.app_primary_text'))
         }
         .layoutWeight(1)
-        .height(42)
+        .height(36)
         .justifyContent(FlexAlign.Center)
         .borderRadius(8)
         .backgroundColor(level === this.celsius
@@ -69,7 +69,7 @@ export struct TemperaturePicker {
       }, (level: number) => level.toString())
     }
     .width('100%')
-    .padding({ top: 11, bottom: 11 })
+    .padding({ top: 9, bottom: 9 })
     .border({ width: { top: 1 }, color: $r('app.color.app_rule') })
     .opacity(this.disabled ? 0.4 : 1)
   }
