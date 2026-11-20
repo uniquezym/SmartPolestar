@@ -1451,7 +1451,10 @@ struct Index {
     this.stopLocationTimer();
     this.stopVehicleStream();
     // 退出登录 → 实况窗也要拆掉，不能让控制入口留在系统层
-    await LiveViewManager.stop();
+    const context = this.context;
+    if (context !== undefined) {
+      await LiveViewManager.stop(context as common.UIAbilityContext);
+    }
     if (this.repository !== undefined) {
       await this.repository.logout();
     }
@@ -1804,7 +1807,11 @@ struct Index {
    * @param stillRunning 车端是否仍在净化
    */
   private async reconcileAirLiveView(stillRunning: boolean): Promise<void> {
-    await LiveViewManager.reconcile(stillRunning);
+    const context = this.context;
+    if (context === undefined) {
+      return;
+    }
+    await LiveViewManager.reconcile(context as common.UIAbilityContext, stillRunning);
     if (stillRunning) {
       // 车端还在跑，但实况窗可能已随进程被杀而消失 —— 补建一个
       if (!await LiveViewManager.exists()) {
@@ -1838,7 +1845,7 @@ struct Index {
       return;
     }
     if (!this.airActive()) {
-      LiveViewManager.stop().catch((err: Error) => {
+      LiveViewManager.stop(context as common.UIAbilityContext).catch((err: Error) => {
         Log.warn(`销毁空气净化实况窗失败: ${err.message}`);
       });
       return;

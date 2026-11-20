@@ -83,9 +83,8 @@ export class LiveViewManager {
     }
 
     try {
-      const agent = await LiveViewManager.buildStopAgent(context);
-      await liveViewManager.startLiveView(
-        LiveViewManager.buildLiveView(data, agent));
+      const view = await LiveViewManager.buildLiveView(context, data);
+      await liveViewManager.startLiveView(view);
       Log.info(`空气净化实况窗已创建: id=${LiveViewManager.LIVE_VIEW_ID}`);
     } catch (err) {
       const e = err as BusinessError;
@@ -107,9 +106,8 @@ export class LiveViewManager {
       return;
     }
     try {
-      const agent = await LiveViewManager.buildStopAgent(context);
-      await liveViewManager.updateLiveView(
-        LiveViewManager.buildLiveView(data, agent));
+      const view = await LiveViewManager.buildLiveView(context, data);
+      await liveViewManager.updateLiveView(view);
     } catch (err) {
       const e = err as BusinessError;
       if (e.code !== 1003500009 && e.code !== 1003500010) {
@@ -120,17 +118,18 @@ export class LiveViewManager {
 
   /**
    * 销毁实况窗。
+   *
+   * @param context UIAbility 上下文
    */
-  static async stop(): Promise<void> {
+  static async stop(context: common.UIAbilityContext): Promise<void> {
     if (!await LiveViewManager.isAvailable()) {
       return;
     }
     try {
       // stopLiveView 只需要 id 与 event，
       // 但接口签名要求完整的 LiveView —— 这里用空数据把其余字段填上。
-      // 点击动作对停止没有意义，可以不带。
-      await liveViewManager.stopLiveView(
-        LiveViewManager.buildLiveView(LiveViewData.EMPTY_DATA));
+      const view = await LiveViewManager.buildLiveView(context, LiveViewData.EMPTY_DATA);
+      await liveViewManager.stopLiveView(view);
       Log.info(`空气净化实况窗已销毁: id=${LiveViewManager.LIVE_VIEW_ID}`);
     } catch (err) {
       const e = err as BusinessError;
@@ -147,14 +146,15 @@ export class LiveViewManager {
    * 应用启动时调用：车端可能早就关了净化（甚至应用被杀掉期间到时停机），
    * 实况窗却还留在状态栏显示「净化中」。这里把它停掉。
    *
+   * @param context      UIAbility 上下文
    * @param stillRunning 车端是否仍在净化
    */
-  static async reconcile(stillRunning: boolean): Promise<void> {
+  static async reconcile(context: common.UIAbilityContext, stillRunning: boolean): Promise<void> {
     if (!await LiveViewManager.exists()) {
       return;
     }
     if (!stillRunning) {
-      await LiveViewManager.stop();
+      await LiveViewManager.stop(context);
       Log.info('已清理残留的空气净化实况窗');
     }
   }
@@ -162,19 +162,25 @@ export class LiveViewManager {
   /**
    * 组装实况窗数据。
    *
-   * 卡片态分三块：
-   *   固定区   —— 标题「空气净化」+ 内容（AQI / PM2.5 / 剩余时间）
-   *   辅助区   —— extensionData，「运行中」状态词
-   *   扩展区   —— layoutData.serviceButtons，「停止净化」服务按钮
+   * 卡片态分两块：
+   *   固定区 —— 标题「空气净化中」+ 内容（AQI / PM2.5 / 剩余时间）
+   *   辅助区 —— extensionData，「停止净化」按钮
    * 胶囊态：
    *   capsule —— 「净化中」+ 剩余分钟数
    *
-   * 【卡片主体不挂点击动作】
-   * 实况窗要自闭环 —— 展开卡片就能看到全部信息，不该把用户拽进应用。
-   * 只有「停止净化」按钮有动作。
+   * 【primary.clickAction 是必填项】
+   * 少了它 startLiveView 会直接报 401
+   * （The type of primary.clickAction must be WantAgent）。
+   * 这里让它把用户带回应用看详情 —— 与「停止净化」分开。
+   *
+   * 【不放 layoutData】
+   * LAYOUT_TYPE_DEFAULT 本身就不渲染扩展区，
+   * 挂 serviceButtons 没有意义，却会引入额外的参数校验风险。
+   * 「停止净化」放辅助区的拓展按钮位，是官方规范推荐的位置。
    */
-  private static buildLiveView(data: AirPurifyLiveData,
-    agent?: WantAgent): liveViewManager.LiveView {
+  private static async buildLiveView(context: common.UIAbilityContext,
+    data: AirPurifyLiveData): Promise<liveViewManager.LiveView> {
+    const stopAgent = await LiveViewManager.buildStopAgent(context);
     const primary: liveViewManager.PrimaryData = {
       title: LiveViewData.TITLE,
       content: [
@@ -184,25 +190,15 @@ export class LiveViewManager {
       ],
       // 归档时长：实况窗结束后在通知中心保留的分钟数
       keepTime: 0,
-      // 辅助区：状态词
+      // 卡片主体的默认动作：回到应用看详情
+      clickAction: await LiveViewManager.buildOpenAgent(context),
+      // 辅助区：「停止净化」快捷操作
       extensionData: {
-        text: LiveViewData.RUNNING_LABEL,
-        type: liveViewManager.ExtensionType.EXTENSION_TYPE_COMMON_TEXT
+        text: LiveViewData.STOP_LABEL,
+        type: liveViewManager.ExtensionType.EXTENSION_TYPE_COMMON_TEXT,
+        clickAction: stopAgent
       }
     };
-    if (agent !== undefined) {
-      // 扩展区：唯一带动作的地方 —— 「停止净化」
-      primary.layoutData = {
-        layoutType: liveViewManager.LayoutType.LAYOUT_TYPE_DEFAULT,
-        serviceButtons: [
-          {
-            name: LiveViewData.STOP_LABEL,
-            clickAction: agent
-          }
-        ],
-        isServiceButtonsDisplayed: true
-      };
-    }
     return {
       id: LiveViewManager.LIVE_VIEW_ID,
       event: LiveViewData.EVENT_NAME,
@@ -236,6 +232,26 @@ export class LiveViewManager {
         }
       ],
       actionType: wantAgent.OperationType.SEND_COMMON_EVENT,
+      requestCode: 0,
+      actionFlags: [wantAgent.WantAgentFlags.UPDATE_PRESENT_FLAG]
+    };
+    return wantAgent.getWantAgent(info);
+  }
+
+  /**
+   * 构造「打开应用」的 WantAgent。
+   *
+   * 实况窗卡片的默认点击动作 —— 点卡片主体回应用看详情。
+   */
+  private static async buildOpenAgent(context: common.UIAbilityContext): Promise<WantAgent> {
+    const info: wantAgent.WantAgentInfo = {
+      wants: [
+        {
+          bundleName: context.abilityInfo.bundleName,
+          abilityName: LiveViewData.ABILITY_NAME
+        }
+      ],
+      actionType: wantAgent.OperationType.START_ABILITIES,
       requestCode: 0,
       actionFlags: [wantAgent.WantAgentFlags.UPDATE_PRESENT_FLAG]
     };

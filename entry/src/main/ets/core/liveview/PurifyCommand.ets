@@ -103,7 +103,7 @@ export class PurifyCommand {
     }
 
     // 4. 确认关闭 —— 销毁实况窗
-    await LiveViewManager.stop();
+    await LiveViewManager.stop(context);
     Log.info('实况窗停止净化：车端已关闭，实况窗已销毁');
   }
 

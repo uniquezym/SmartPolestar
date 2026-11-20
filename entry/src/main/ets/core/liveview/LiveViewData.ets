@@ -25,8 +25,13 @@ export interface AirPurifyLiveData {
  * 实况窗文案组装。
  */
 export class LiveViewData {
-  /** 实况窗事件标识 —— 同一业务用同一个 event，系统据此归类。 */
-  static readonly EVENT_NAME: string = 'AIR_PURIFICATION';
+  /**
+   * 实况窗事件标识 —— 同一业务用同一个 event，系统据此归类。
+   *
+   * 只能用官方白名单里的场景值，否则会被判为不合规场景。
+   * 空气净化属于「用户主动开启、带时长的计时型任务」，对应 TIMER。
+   */
+  static readonly EVENT_NAME: string = 'TIMER';
 
   /** 卡片标题。 */
   static readonly TITLE: string = '空气净化';
@@ -44,6 +49,13 @@ export class LiveViewData {
 
   /** 展开卡片里「停止净化」按钮的文案。 */
   static readonly STOP_LABEL: string = '停止净化';
+
+  /**
+   * 打开应用用的 Ability 名。
+   *
+   * 实况窗卡片的默认点击动作用它把用户带回应用看详情。
+   */
+  static readonly ABILITY_NAME: string = 'EntryAbility';
 
   /** 空数据 —— 停止实况窗时不需要真实内容。 */
   static readonly EMPTY_DATA: AirPurifyLiveData = {
