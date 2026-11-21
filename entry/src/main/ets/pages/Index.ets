@@ -308,6 +308,8 @@ struct Index {
   @State parkedCoordinate: string = '';
   /** 停车地点信息（经纬度反查结果）。解析中时为 undefined。 */
   @State parkedPlace: ParkedPlaceInfo | undefined = undefined;
+  /** 停车地点是否正在反查。解析中时不出经纬度，避免闪一下再跳成地址名。 */
+  @State parkedResolving: boolean = false;
   /** 停车纬度。 */
   @State parkedLatitude: number = -1;
   /** 停车经度。 */
@@ -2790,39 +2792,34 @@ struct Index {
     const lon = this.parkedLongitude;
     const ctx = this.context;
     if (ctx === undefined) {
+      this.parkedResolving = false;
       return;
     }
-    this.parkedPlace = undefined;
+    this.parkedResolving = true;
     const info = await PlaceResolver.resolve(ctx, lat, lon);
     // 期间坐标可能已变，丢弃过期结果
     if (lat === this.parkedLatitude && lon === this.parkedLongitude) {
       this.parkedPlace = info;
+      this.parkedResolving = false;
     }
   }
 
   /**
    * 「最后停车位置」的副信息 —— 只显示 AOI 名。
    *
-   * 反查失败时回退到原始坐标。
+   * 反查进行中时留空 —— 先闪一下经纬度再跳成地址名，
+   * 用户会以为位置变了。只有解析彻底失败才回退显示原始坐标。
    */
   private parkedDetail(): string {
+    if (this.parkedResolving) {
+      return '';
+    }
     const place = this.parkedPlace;
     if (place === undefined) {
       return this.parkedCoordinate;
     }
     const name = place.displayName();
     return name.length > 0 ? name : this.parkedCoordinate;
-  }
-
-  /**
-   * 「最后停车位置」右侧标签 —— AOI 分类与距离。
-   */
-  private parkedTag(): string {
-    const place = this.parkedPlace;
-    if (place === undefined) {
-      return '';
-    }
-    return place.tagText();
   }
 
   /**
@@ -4952,7 +4949,6 @@ struct Index {
               label: '最后停车位置',
               value: this.parkedTime,
               detail: this.parkedDetail(),
-              tag: this.parkedTag(),
               showChevron: true,
               // 页尾最后一行，下面没有下一项，不需要分隔线
               showDivider: false,

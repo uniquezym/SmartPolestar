@@ -47,18 +47,4 @@ export class ParkedPlaceInfo {
     }
     return this.roadName;
   }
-
-  /**
-   * 右侧标签 —— AOI 分类与距离。
-   */
-  tagText(): string {
-    const parts: string[] = [];
-    if (this.aoiType.length > 0) {
-      parts.push(this.aoiType);
-    }
-    if (this.distance >= 0 && this.distance < 1000) {
-      parts.push(`${Math.round(this.distance)}m`);
-    }
-    return parts.join(' · ');
-  }
 }
