@@ -47,4 +47,47 @@ export class ParkedPlaceInfo {
     }
     return this.roadName;
   }
+
+  /**
+   * 序列化成纯对象，供持久化。
+   */
+  toPlain(): ParkedPlacePlain {
+    return {
+      aoiName: this.aoiName,
+      aoiType: this.aoiType,
+      poiName: this.poiName,
+      poiType: this.poiType,
+      address: this.address,
+      roadName: this.roadName,
+      distance: this.distance
+    };
+  }
+
+  /**
+   * 从纯对象还原。
+   */
+  static fromPlain(plain: ParkedPlacePlain): ParkedPlaceInfo {
+    const info = new ParkedPlaceInfo();
+    info.aoiName = plain.aoiName;
+    info.aoiType = plain.aoiType;
+    info.poiName = plain.poiName;
+    info.poiType = plain.poiType;
+    info.address = plain.address;
+    info.roadName = plain.roadName;
+    info.distance = plain.distance;
+    return info;
+  }
+}
+
+/**
+ * 停车地点的持久化形态。
+ */
+export interface ParkedPlacePlain {
+  aoiName: string;
+  aoiType: string;
+  poiName: string;
+  poiType: string;
+  address: string;
+  roadName: string;
+  distance: number;
 }

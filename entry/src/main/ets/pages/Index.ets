@@ -15,6 +15,7 @@ import { Detail } from './Detail';
 import { PlaceResolver } from '../core/vehicle/PlaceResolver';
 import { MapLauncher } from '../core/vehicle/MapLauncher';
 import { ParkedPlaceInfo } from '../core/vehicle/ParkedPlaceInfo';
+import { ParkedPlaceStore } from '../core/vehicle/ParkedPlaceStore';
 import { CardPublisher } from '../core/vehicle/CardPublisher';
 import { BiometricGuard, BiometricResult } from '../core/vehicle/BiometricGuard';
 import { SessionStore } from '../core/session/SessionStore';
@@ -2784,6 +2785,10 @@ struct Index {
   /**
    * 反查停车坐标对应的地点名。
    *
+   * 先看缓存 —— 停车位置长时间不变，经纬度没变就直接复用上次的结果，
+   * 不必每次进应用都重新请求地理编码（既省配额，副信息也不会闪一下）。
+   * 缓存没有或对不上时才会真的发起反查。
+   *
    * 失败时保持 undefined，UI 回退显示原始坐标 —— 地点名是补充信息，
    * 不该因为它拖垮整个概览页。
    */
@@ -2795,12 +2800,23 @@ struct Index {
       this.parkedResolving = false;
       return;
     }
+
     this.parkedResolving = true;
+    const cached = await ParkedPlaceStore.load(ctx, lat, lon);
+    if (cached !== undefined) {
+      this.parkedPlace = cached;
+      this.parkedResolving = false;
+      return;
+    }
+
     const info = await PlaceResolver.resolve(ctx, lat, lon);
     // 期间坐标可能已变，丢弃过期结果
     if (lat === this.parkedLatitude && lon === this.parkedLongitude) {
       this.parkedPlace = info;
       this.parkedResolving = false;
+      if (info !== undefined) {
+        ParkedPlaceStore.save(ctx, lat, lon, info);
+      }
     }
   }
 
