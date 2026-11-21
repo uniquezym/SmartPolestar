@@ -2801,7 +2801,7 @@ struct Index {
   }
 
   /**
-   * 「最后停车位置」的副信息 —— AOI 名与 POI 名合并成一行。
+   * 「最后停车位置」的副信息 —— 只显示 AOI 名。
    *
    * 反查失败时回退到原始坐标。
    */
@@ -2810,19 +2810,12 @@ struct Index {
     if (place === undefined) {
       return this.parkedCoordinate;
     }
-    const main = place.displayName();
-    const secondary = place.secondaryName();
-    if (main.length === 0) {
-      return this.parkedCoordinate;
-    }
-    if (secondary.length === 0) {
-      return main;
-    }
-    return `${main} · ${secondary}`;
+    const name = place.displayName();
+    return name.length > 0 ? name : this.parkedCoordinate;
   }
 
   /**
-   * 「最后停车位置」右侧标签 —— POI 分类与距离。
+   * 「最后停车位置」右侧标签 —— AOI 分类与距离。
    */
   private parkedTag(): string {
     const place = this.parkedPlace;

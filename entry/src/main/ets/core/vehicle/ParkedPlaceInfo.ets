@@ -1,18 +1,20 @@
 /**
- * 停车地点的结构化反查结果。
+ * 停车地点的反查结果。
  *
- * 地图服务能同时给出 AOI（住宅小区、园区、写字楼这类「地块」）、
- * POI（停车场、商场、便利店这类「兴趣点」）与道路名，
- * 三者层级不同，展示时需要按优先级挑一个。
+ * 解析层保留全部信息（AOI / POI / 道路 / 地址），供后续功能取用；
+ * 展示层目前只取 AOI —— 它描述的是「车停在哪片区域里」
+ * （小区、园区、写字楼），最贴合「最后停车位置」这句话的语义。
  */
 export class ParkedPlaceInfo {
-  /** AOI 名 —— 优先级最高，通常是小区 / 园区 / 写字楼名称。 */
+  /** AOI 名，例如「XX 小区」「XX 科技园」。 */
   aoiName: string = '';
-  /** POI 名 —— 例如「XX 地下停车场」。 */
+  /** AOI 分类，例如「住宅区」「工业园区」。 */
+  aoiType: string = '';
+  /** POI 名，例如「XX 地下停车场」。 */
   poiName: string = '';
   /** POI 分类，例如「停车场」「商场」。 */
   poiType: string = '';
-  /** POI 详细地址。 */
+  /** 详细地址。 */
   address: string = '';
   /** 道路名。 */
   roadName: string = '';
@@ -28,46 +30,31 @@ export class ParkedPlaceInfo {
   }
 
   /**
-   * 最终展示名。
+   * 展示名 —— 只取 AOI 名。
    *
-   * 优先级：AOI → POI → 道路名 → 详细地址。
-   * AOI 描述的是「车停在哪片区域里」，POI 描述的是「车停在哪个点」，
-   * 前者更符合「最后停车位置」这句话的语义，所以放前面。
+   * 展示层不显示 POI：POI 是「哪一个点」，AOI 才是「哪一片区域」，
+   * 后者更贴合「最后停车位置」的语义。
+   *
+   * AOI 缺失时退到地址 / 道路名 —— 系统逆地理编码那条兜底路径拿不到 AOI，
+   * 只能落到后面几项。
    */
   displayName(): string {
     if (this.aoiName.length > 0) {
       return this.aoiName;
     }
-    if (this.poiName.length > 0) {
-      return this.poiName;
+    if (this.address.length > 0) {
+      return this.address;
     }
-    if (this.roadName.length > 0) {
-      return this.roadName;
-    }
-    return this.address;
+    return this.roadName;
   }
 
   /**
-   * 副信息 —— 展示名之外还想补充的一项。
-   *
-   * AOI 与 POI 同时存在时，把 POI 名并上来（两者通常是「小区」+「地下停车场」的关系）；
-   * 否则用 POI 分类或距离补位。空串表示没有可补充的内容。
-   */
-  secondaryName(): string {
-    if (this.aoiName.length > 0 && this.poiName.length > 0 &&
-      this.poiName !== this.aoiName) {
-      return this.poiName;
-    }
-    return '';
-  }
-
-  /**
-   * 右侧标签 —— POI 分类 + 距离。
+   * 右侧标签 —— AOI 分类与距离。
    */
   tagText(): string {
     const parts: string[] = [];
-    if (this.poiType.length > 0) {
-      parts.push(this.poiType);
+    if (this.aoiType.length > 0) {
+      parts.push(this.aoiType);
     }
     if (this.distance >= 0 && this.distance < 1000) {
       parts.push(`${Math.round(this.distance)}m`);

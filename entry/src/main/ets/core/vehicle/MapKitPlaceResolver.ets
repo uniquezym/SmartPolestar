@@ -57,7 +57,9 @@ export class MapKitPlaceResolver {
   }
 
   /**
-   * 从返回结果里挑选 AOI / POI / 道路。
+   * 从返回结果里挑最近的 AOI / POI / 道路。
+   *
+   * 全量保留，展示层再决定取哪一项。
    */
   private static pick(result: site.ReverseGeocodeResult): ParkedPlaceInfo {
     const info = new ParkedPlaceInfo();
@@ -66,8 +68,8 @@ export class MapKitPlaceResolver {
     if (aois.length > 0) {
       const aoi = aois[0];
       info.aoiName = aoi.name !== undefined ? aoi.name : '';
-      if (info.poiType.length === 0 && aoi.poiType !== undefined) {
-        info.poiType = aoi.poiType;
+      if (aoi.poiType !== undefined) {
+        info.aoiType = aoi.poiType;
       }
       if (aoi.distance !== undefined) {
         info.distance = aoi.distance;
