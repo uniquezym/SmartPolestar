@@ -2,6 +2,7 @@ import { common, abilityAccessCtrl } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { geoLocationManager } from '@kit.LocationKit';
 import { MapComponent, map, mapCommon } from '@kit.MapKit';
+import { AppIcon, AppIconName } from '../components/Icons';
 import { Log } from '../common/Log';
 import { CoordinateTransform } from '../core/vehicle/CoordinateTransform';
 import { MapLauncher } from '../core/vehicle/MapLauncher';
@@ -335,14 +336,28 @@ struct ParkedPlace {
   build() {
     Column() {
       // ---------- 标题栏 ----------
-      Row() {
+      Row({ space: 12 }) {
+        Stack({ alignContent: Alignment.Center }) {
+          AppIcon({ name: AppIconName.CHEVRON_DOWN, iconSize: 18, color: $r('app.color.app_primary_text') })
+            .width(18)
+            .height(18)
+            .rotate({ angle: 90 })
+        }
+        .width(32)
+        .height(32)
+        .borderRadius(4)
+        .border({ width: 1, color: $r('app.color.app_rule') })
+        .onClick(() => {
+          this.getUIContext().getRouter().back();
+        })
+
         Text('车辆停放位置')
-          .fontSize(23)
+          .fontSize(21)
           .fontWeight(FontWeight.Normal)
           .fontColor($r('app.color.app_primary_text'))
       }
       .width('100%')
-      .padding({ left: 18, right: 18, top: 16, bottom: 14 })
+      .padding({ left: 14, right: 18, top: 16, bottom: 14 })
       .backgroundColor($r('app.color.app_background'))
 
       // ---------- 地图 ----------
