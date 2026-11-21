@@ -179,14 +179,33 @@ struct ParkedPlace {
 
   /**
    * 地图初始化完成：打两个标记、框住两点。
+   *
+   * 【坑】ArkUI 的 AsyncCallback 在成功时传的 err 是 **undefined**，
+   * 不是 `{code: 0}`。直接读 err.code 会抛 TypeError，
+   * 而回调里的异常会被静默吞掉 —— 表现就是「地图出来了但标记一个都没有，
+   * 也没有任何日志」。所以这里必须先判空。
    */
-  private onMapReady(err: BusinessError, controller: map.MapComponentController): void {
-    if (err.code !== 0) {
-      Log.warn(`地图初始化失败: code=${err.code} ${err.message}`);
-      return;
+  private onMapReady(err: BusinessError | undefined,
+    controller: map.MapComponentController | undefined): void {
+    try {
+      if (err !== undefined && err.code !== 0) {
+        Log.warn(`地图初始化失败: code=${err.code} ${err.message}`);
+        return;
+      }
+      if (controller === undefined) {
+        Log.warn('地图初始化回调没有拿到控制器');
+        return;
+      }
+      this.mapController = controller;
+      // 地图底图还没加载完时打的标记可能不渲染 —— 底图就绪后再补一次。
+      controller.on('mapLoad', () => {
+        Log.info('地图底图加载完成');
+        this.setupMarkers(controller);
+      });
+      this.setupMarkers(controller);
+    } catch (e) {
+      Log.error(`地图初始化回调异常: ${(e as Error).message}`);
     }
-    this.mapController = controller;
-    this.setupMarkers(controller);
   }
 
   /**
