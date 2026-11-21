@@ -5360,7 +5360,9 @@ struct Index {
     // ---------- 半模态面板 ----------
     // 挂在根节点上：弹起时主界面变暗但不销毁，关闭后回到原位置。
     .bindSheet(this.sheetKind !== SheetKind.NONE, this.sheetBuilder(), {
-      height: SheetSize.LARGE,
+      // 高度跟随内容：内容少的面板（空气净化、寻车）只弹到刚好的高度，
+      // 不会像固定高度那样留出大片空白。
+      height: SheetSize.FIT_CONTENT,
       dragBar: true,
       showClose: true,
       maskColor: $r('app.color.app_scrim'),

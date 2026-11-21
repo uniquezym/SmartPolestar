@@ -6,6 +6,20 @@ import { HealthCard } from './HealthCard';
 import { TogglePhase } from './StateToggle';
 import { VehicleCard } from './VehicleCard';
 import { SheetKind } from './QuickEntryGrid';
+import { display } from '@kit.ArkUI';
+
+/**
+ * 面板内容最高占屏幕高度的比例。
+ *
+ * 剩下的空间留给面板标题与拖动条 —— 内容再长也不能把面板顶到全屏，
+ * 否则就失去了「半模态」的语义。
+ */
+const MAX_HEIGHT_RATIO: number = 0.72;
+
+/**
+ * 屏幕高度获取失败时的兜底高度（vp）。
+ */
+const FALLBACK_MAX_HEIGHT: number = 520;
 
 /**
  * 半模态面板的内容宿主。
@@ -18,6 +32,26 @@ import { SheetKind } from './QuickEntryGrid';
  */
 @Component
 export struct SheetHost {
+  /**
+   * 面板内容的高度上限（vp）。
+   *
+   * 面板高度跟随内容，但内容不能高过屏幕 —— 取屏幕高度的 72%，
+   * 剩下的空间留给面板标题与拖动条。超出后由 Scroll 内部滚动。
+   */
+  private readonly maxContentHeight: number = SheetHost.screenMaxHeight();
+
+  /**
+   * 屏幕高度换算出的内容上限。取不到屏幕时用兜底值。
+   */
+  private static screenMaxHeight(): number {
+    try {
+      const heightVp = px2vp(display.getDefaultDisplaySync().height);
+      return Math.floor(heightVp * MAX_HEIGHT_RATIO);
+    } catch (err) {
+      return FALLBACK_MAX_HEIGHT;
+    }
+  }
+
   /** 当前面板种类。 */
   kind: SheetKind = SheetKind.NONE;
 
@@ -141,6 +175,11 @@ export struct SheetHost {
 
   /**
    * 面板内容。
+   *
+   * Scroll 不设固定高度 —— 面板用 SheetSize.FIT_CONTENT，高度跟随内容。
+   * 内容少的面板（空气净化、寻车）只弹到刚好的高度。
+   * 内容多的面板（车辆健康）超过可用高度时由 Scroll 承担滚动，
+   * 面板本身不会溢出屏幕。
    */
   @Builder
   content() {
@@ -278,7 +317,10 @@ export struct SheetHost {
       .padding({ left: 18, right: 18, bottom: 20 })
     }
     .width('100%')
-    .height('100%')
+    // 不设固定高度：面板用 SheetSize.FIT_CONTENT，高度由内容撑开。
+    // maxHeight 兜住超长内容（车辆健康），超出后 Scroll 内部滚动，
+    // 面板不会高过屏幕。
+    .constraintSize({ maxHeight: this.maxContentHeight })
     .align(Alignment.Top)
   }
 
@@ -287,7 +329,6 @@ export struct SheetHost {
       this.content()
     }
     .width('100%')
-    .height('100%')
     .backgroundColor($r('app.color.app_background'))
   }
 }
