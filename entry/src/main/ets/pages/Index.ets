@@ -3640,6 +3640,15 @@ struct Index {
     const failures: string[] = [];
     /** 成功保存的配置项名称，用于提示「只提示设置的内容」。 */
     const savedLabels: string[] = [];
+    /**
+     * 成功下发的值 —— 指令发出后车端可能还没生效，回读会拿到旧值。
+     * 所以「已生效值」以这里记录的成功下发值为准，回读只用于更新**没改动**的项。
+     */
+    let savedSoc = -1;
+    let savedAmp = -1;
+    let savedTimerOn = false;
+    let savedTimerStart = -1;
+    let savedTimerStop = -1;
 
     try {
       // 充电上限：只有跟车端已生效的值不同才下发。
@@ -3647,7 +3656,7 @@ struct Index {
         const result = await ChargeConfig.setTargetSoc(client, vin, this.draftChargeSoc);
         if (result.success) {
           savedLabels.push('充电上限');
-          this.chargeTargetSoc = this.draftChargeSoc;
+          savedSoc = this.draftChargeSoc;
         } else {
           failures.push(result.message);
         }
@@ -3658,7 +3667,7 @@ struct Index {
         const result = await ChargeConfig.setAmpLimit(client, vin, this.draftChargeAmp);
         if (result.success) {
           savedLabels.push('电流上限');
-          this.chargeAmpLimit = this.draftChargeAmp;
+          savedAmp = this.draftChargeAmp;
         } else {
           failures.push(result.message);
         }
@@ -3676,9 +3685,9 @@ struct Index {
           ChargeConfig.formatMinutes(this.draftChargeStopMinutes));
         if (result.success) {
           savedLabels.push('预约充电');
-          this.chargeTimerActivated = this.draftChargeTimerOn;
-          this.chargeTimerStartMinutes = this.draftChargeStartMinutes;
-          this.chargeTimerStopMinutes = this.draftChargeStopMinutes;
+          savedTimerOn = this.draftChargeTimerOn;
+          savedTimerStart = this.draftChargeStartMinutes;
+          savedTimerStop = this.draftChargeStopMinutes;
         } else {
           failures.push(result.message);
         }
@@ -3690,19 +3699,68 @@ struct Index {
       this.chargeSaving = false;
     }
 
+    // 已成功下发的项：生效值与编辑值都更新成刚下发的值 ——
+    // 这样卡片的「有改动」判断归零，保存按钮回到不可点。
+    // 失败的那几项不动，保留用户填的内容以便重试。
+    if (savedSoc >= 0) {
+      this.chargeTargetSoc = savedSoc;
+      this.draftChargeSoc = savedSoc;
+    }
+    if (savedAmp >= 0) {
+      this.chargeAmpLimit = savedAmp;
+      this.draftChargeAmp = savedAmp;
+    }
+    if (savedLabels.indexOf('预约充电') >= 0) {
+      this.chargeTimerActivated = savedTimerOn;
+      this.chargeTimerStartMinutes = savedTimerStart;
+      this.chargeTimerStopMinutes = savedTimerStop;
+      this.draftChargeTimerOn = savedTimerOn;
+      this.draftChargeStartMinutes = savedTimerStart;
+      this.draftChargeStopMinutes = savedTimerStop;
+    }
+
     // 提示只说改了哪几项 —— 逐项列出，用户一眼看到自己动过的配置生效了。
     const savedText = savedLabels.length > 0 ? savedLabels.join('、') : '';
     if (failures.length === 0) {
       this.toast(savedText.length > 0 ? `${savedText}已保存` : '没有需要保存的修改');
       // 指令发出不等于车端已生效 —— 重新读一次，以车端实际状态为准。
-      // 不同步编辑态：车端可能还没生效，同步会把用户刚填的值冲掉。
+      // 回读只更新**没改动**的那些项；已下发的项保持上面记下的值，
+      // 否则车端还没生效时回读到旧值，会把生效值改回去。
       if (savedLabels.length > 0) {
         await this.loadChargeConfig(vin, false);
+        this.restoreSavedChargeValues(savedSoc, savedAmp, savedTimerOn, savedTimerStart, savedTimerStop);
       }
       return;
     }
     // 部分成功：先说成功保存了哪几项，再说哪项失败。
     this.toast(savedText.length > 0 ? `${savedText}已保存；${failures.join('；')}` : failures.join('；'));
+  }
+
+  /**
+   * 回读之后，把已成功下发的项恢复成刚下发的值。
+   *
+   * 回读是「车端当前实际状态」，而下发后车端可能还没生效 ——
+   * 这时回读到的是旧值，会把生效值改回去，按钮又会变成可点。
+   * 所以已下发项以「刚下发的值」为准。
+   */
+  private restoreSavedChargeValues(savedSoc: number, savedAmp: number, savedTimerOn: boolean,
+    savedTimerStart: number, savedTimerStop: number): void {
+    if (savedSoc >= 0) {
+      this.chargeTargetSoc = savedSoc;
+      this.draftChargeSoc = savedSoc;
+    }
+    if (savedAmp >= 0) {
+      this.chargeAmpLimit = savedAmp;
+      this.draftChargeAmp = savedAmp;
+    }
+    if (savedTimerStart >= 0 && savedTimerStop >= 0) {
+      this.chargeTimerActivated = savedTimerOn;
+      this.chargeTimerStartMinutes = savedTimerStart;
+      this.chargeTimerStopMinutes = savedTimerStop;
+      this.draftChargeTimerOn = savedTimerOn;
+      this.draftChargeStartMinutes = savedTimerStart;
+      this.draftChargeStopMinutes = savedTimerStop;
+    }
   }
 
   /**
