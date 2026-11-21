@@ -2872,7 +2872,10 @@ struct Index {
       params: {
         latitude: this.parkedLatitude,
         longitude: this.parkedLongitude,
-        timestamp: this.parkedTimestamp
+        timestamp: this.parkedTimestamp,
+        // 概览页已经解析好的地点名直接传过去 ——
+        // 预览页不再自己反查，避免先闪一下经纬度再跳成地址。
+        name: this.parkedPlace !== undefined ? this.parkedPlace.fullName() : ''
       }
     });
   }

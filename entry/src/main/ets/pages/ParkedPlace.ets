@@ -2,13 +2,11 @@ import { common, abilityAccessCtrl } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { geoLocationManager } from '@kit.LocationKit';
 import { MapComponent, map, mapCommon } from '@kit.MapKit';
-import { AppIcon, AppIconName } from '../components/Icons';
 import { Log } from '../common/Log';
 import { CoordinateTransform } from '../core/vehicle/CoordinateTransform';
 import { MapLauncher } from '../core/vehicle/MapLauncher';
 import { ParkedPlaceInfo } from '../core/vehicle/ParkedPlaceInfo';
 import { PetalMapLauncher } from '../core/vehicle/PetalMapLauncher';
-import { PlaceResolver } from '../core/vehicle/PlaceResolver';
 
 /**
  * 停车位置地点预览页。
@@ -68,6 +66,9 @@ struct ParkedPlace {
       this.latitude = params.latitude;
       this.longitude = params.longitude;
       this.parkedTimestamp = params.timestamp;
+      // 地点名由概览页直接带过来 —— 本页不再反查，
+      // 否则会先闪一下经纬度再跳成地址。
+      this.placeName = params.name ?? '';
     }
     this.mapOptions = {
       position: { target: this.parkingLatLng(), zoom: 17 },
@@ -76,24 +77,8 @@ struct ParkedPlace {
       scaleControlsEnabled: false,
       compassControlsEnabled: false
     };
-    this.resolvePlaceName();
     this.requestLocationPermission();
     this.loadCurrentLocation();
-  }
-
-  /**
-   * 反查停车点地址。
-   *
-   * 概览页已经解析过一次，这里再调一次是为了在概览页还没解析完
-   * 就被点进来的情况下也能拿到完整地址 —— PlaceResolver 内部有缓存，
-   * 重复调用不会产生额外请求。
-   */
-  private async resolvePlaceName(): Promise<void> {
-    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    const info = await PlaceResolver.resolve(context, this.latitude, this.longitude);
-    if (info !== undefined) {
-      this.placeName = info.fullName();
-    }
   }
 
   /**
@@ -350,28 +335,14 @@ struct ParkedPlace {
   build() {
     Column() {
       // ---------- 标题栏 ----------
-      Row({ space: 12 }) {
-        Stack({ alignContent: Alignment.Center }) {
-          AppIcon({ name: AppIconName.CHEVRON_DOWN, iconSize: 18, color: $r('app.color.app_primary_text') })
-            .width(18)
-            .height(18)
-            .rotate({ angle: 90 })
-        }
-        .width(32)
-        .height(32)
-        .borderRadius(4)
-        .border({ width: 1, color: $r('app.color.app_rule') })
-        .onClick(() => {
-          this.getUIContext().getRouter().back();
-        })
-
+      Row() {
         Text('车辆停放位置')
-          .fontSize(17)
+          .fontSize(23)
           .fontWeight(FontWeight.Normal)
           .fontColor($r('app.color.app_primary_text'))
       }
       .width('100%')
-      .padding({ left: 14, right: 18, top: 16, bottom: 14 })
+      .padding({ left: 18, right: 18, top: 16, bottom: 14 })
       .backgroundColor($r('app.color.app_background'))
 
       // ---------- 地图 ----------
@@ -388,7 +359,7 @@ struct ParkedPlace {
       // ---------- 底部信息卡 ----------
       Column({ space: 10 }) {
         Text(this.displayName())
-          .fontSize(17)
+          .fontSize(16)
           .fontWeight(FontWeight.Medium)
           .fontColor($r('app.color.app_primary_text'))
           .maxLines(2)
@@ -436,4 +407,6 @@ class ParkedPlaceParams {
   latitude: number = 0;
   longitude: number = 0;
   timestamp: number = 0;
+  /** 概览页已解析好的地点名（省市区镇 + AOI）。 */
+  name: string = '';
 }
