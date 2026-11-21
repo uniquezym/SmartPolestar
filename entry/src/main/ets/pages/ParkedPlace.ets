@@ -352,7 +352,7 @@ struct ParkedPlace {
         })
 
         Text('最后停车位置')
-          .fontSize(20)
+          .fontSize(19)
           .fontWeight(FontWeight.Normal)
           .fontColor($r('app.color.app_primary_text'))
       }
