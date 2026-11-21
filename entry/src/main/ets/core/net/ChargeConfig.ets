@@ -92,9 +92,69 @@ export interface ChargeConfigResult {
   message: string;
 }
 
+/**
+ * 各服务写方法的响应布局。
+ *
+ * 三个服务的响应结构**并不一致**：
+ *   SetTargetSoc / SetAmpLimit
+ *     status=3（messages.common.v1.Status）、message=4
+ *   SetGlobalChargeTimer
+ *     status=2（entities.common.v1.ResponseStatus）、message=3
+ * 所以每个服务各自声明自己的字段号，不能「两个都取一遍」——
+ * 那样在预约充电上会把 message 当成 status。
+ */
+interface ChargeWriteLayout {
+  /** status 字段号。 */
+  statusField: number;
+  /** message 字段号。 */
+  messageField: number;
+  /** 视为成功的状态码。 */
+  successStatuses: number[];
+}
+
 export class ChargeConfig {
   /** 官方 App 固定用 "RCS" 作为 source。 */
   static readonly SOURCE: string = 'RCS';
+
+  /**
+   * TargetSoc / AmpLimit 的响应布局。
+   *
+   * status 用的是 `messages.common.v1.Status` 枚举：
+   *   UNKNOWN_ERROR(0) SENT(1) DELIVERED(2) SUCCESS(3) SYNCED(4)
+   *   CAR_OFFLINE(5) CAR_ERROR(6) ERROR(7) REPLACED(8)
+   *
+   * 【坑】成功**不止 SUCCESS(3)** —— 官方 App（clithrow.clifor）把
+   * SENT / DELIVERED / SYNCED / SUCCESS / REPLACED 都当作成功。
+   * 只认 3 的话，车端回 SENT(1) 会被误判成失败 ——
+   * 表现为「实际已保存，却提示保存失败：1」。
+   */
+  private static readonly LAYOUT_TARGET_SOC: ChargeWriteLayout = {
+    statusField: 3,
+    messageField: 4,
+    successStatuses: [1, 2, 3, 4, 8]
+  };
+
+  /** AmpLimit 与 TargetSoc 结构完全相同。 */
+  private static readonly LAYOUT_AMP_LIMIT: ChargeWriteLayout = {
+    statusField: 3,
+    messageField: 4,
+    successStatuses: [1, 2, 3, 4, 8]
+  };
+
+  /**
+   * GlobalChargeTimer 的响应布局。
+   *
+   * status 用的是 `entities.common.v1.ResponseStatus` 枚举 ——
+   * 与上面那个 Status 是**两个不同的枚举**：
+   *   UNKNOWN_ERROR(0) SUCCESS(1) VALIDATION_ERROR(2)
+   *   INTERNAL_ERROR(3) NOT_FOUND(4)
+   * 这里只有 SUCCESS(1) 算成功。
+   */
+  private static readonly LAYOUT_CHARGE_TIMER: ChargeWriteLayout = {
+    statusField: 2,
+    messageField: 3,
+    successStatuses: [1]
+  };
 
   /**
    * 充电上限档位：40 ~ 100，每 5% 一档。
@@ -386,7 +446,7 @@ export class ChargeConfig {
     // （官方 App 的 setTargetSoc 固定传 CUSTOM，表示用户自定义值）
     writer.writeVarintField(3, 3);
     return await ChargeConfig.write(client, vin, GrpcClient.SERVICE_TARGET_SOC, 'SetTargetSoc',
-      writer.toUint8Array(), '充电上限');
+      writer.toUint8Array(), '充电上限', ChargeConfig.LAYOUT_TARGET_SOC);
   }
 
   /**
@@ -399,7 +459,7 @@ export class ChargeConfig {
     writer.writeBytesField(1, ChargeConfig.chronosRequest(vin, ChargeConfig.timezoneOffsetMinutes()));
     writer.writeVarintField(2, ampLimit);
     return await ChargeConfig.write(client, vin, GrpcClient.SERVICE_AMP_LIMIT, 'SetAmpLimit',
-      writer.toUint8Array(), '电流上限');
+      writer.toUint8Array(), '电流上限', ChargeConfig.LAYOUT_AMP_LIMIT);
   }
 
   /**
@@ -430,7 +490,7 @@ export class ChargeConfig {
     writer.writeVarintField(3, 0);
 
     return await ChargeConfig.write(client, vin, GrpcClient.SERVICE_CHARGE_TIMER, 'SetGlobalChargeTimer',
-      writer.toUint8Array(), '预约充电');
+      writer.toUint8Array(), '预约充电', ChargeConfig.LAYOUT_CHARGE_TIMER);
   }
 
   /**
@@ -458,11 +518,11 @@ export class ChargeConfig {
    * 也是 SERVER_STREAMING，用一元调用会等到传输超时。取第一帧就够 ——
    * 响应里只有 status / message 一帧状态。
    *
-   * 响应结构：field 2/3 = status/message（不同服务字段号略有出入，
-   * 这里把两者都取一遍），Status 枚举 3 = SUCCESS。
+   * 响应结构各服务不同，由 layout 声明自己的 status / message 字段号
+   * 与成功状态码集合。
    */
   private static async write(client: GrpcClient, vin: string, service: string, method: string,
-    payload: Uint8Array, label: string): Promise<ChargeConfigResult> {
+    payload: Uint8Array, label: string, layout: ChargeWriteLayout): Promise<ChargeConfigResult> {
     try {
       const response = await client.callStreamFirst(service, method, vin, payload,
         GrpcClient.DEFAULT_TIMEOUT_MS, true);
@@ -472,14 +532,12 @@ export class ChargeConfig {
         return { success: true, message: `${label}已保存` };
       }
       const fields = new ProtoReader(response).decode();
-      // SetTargetSocResponse: 3=status 4=message
-      // SetAmpLimitResponse:  3=status 4=message
-      // SetGlobalChargeTimerResponse: 2=status 3=message
-      const status = ProtoValue.asInteger(ProtoValue.get(fields, 3)) ??
-        ProtoValue.asInteger(ProtoValue.get(fields, 2));
-      const message = ProtoValue.decodeString(ProtoValue.get(fields, 4)) ||
-        ProtoValue.decodeString(ProtoValue.get(fields, 3));
-      if (status === undefined || status === 3) {
+      const status = ProtoValue.asInteger(ProtoValue.get(fields, layout.statusField));
+      const message = ProtoValue.decodeString(ProtoValue.get(fields, layout.messageField));
+      Log.info(TAG, `充电配置响应: ${label} status=${status} message=${message}`);
+      // status 缺失（proto3 默认值不编码）也算成功 ——
+      // 车端只回 id / vin 时说明它收到了指令。
+      if (status === undefined || layout.successStatuses.indexOf(status) >= 0) {
         Log.info(TAG, `充电配置已下发: ${label}`);
         return { success: true, message: `${label}已保存` };
       }
