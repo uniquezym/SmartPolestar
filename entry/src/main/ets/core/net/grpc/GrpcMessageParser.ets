@@ -1,5 +1,8 @@
 import { Log } from '../../../common/Log';
 
+/** 本文件的日志 Tag —— 过滤日志时按它筛。 */
+const TAG: string = 'GrpcMessageParser';
+
 /**
  * gRPC 消息帧增量解析器。
  *
@@ -70,7 +73,7 @@ export class GrpcMessageParser {
     } else {
       this.mode = GrpcMessageParser.MODE_BARE;
     }
-    Log.info(`gRPC 流帧模式: ${this.mode === GrpcMessageParser.MODE_FRAMED ? '带帧头' : '裸 protobuf'}`);
+    Log.info(TAG, `gRPC 流帧模式: ${this.mode === GrpcMessageParser.MODE_FRAMED ? '带帧头' : '裸 protobuf'}`);
   }
 
   /**
@@ -94,7 +97,7 @@ export class GrpcMessageParser {
       offset += 5 + length;
 
       if (compressed !== 0) {
-        Log.warn(`gRPC 流收到压缩帧（标志=${compressed}），当前不支持`);
+        Log.warn(TAG, `gRPC 流收到压缩帧（标志=${compressed}），当前不支持`);
         continue;
       }
       messages.push(payload);

@@ -4,6 +4,9 @@ import { WidgetSnapshot, WidgetStore } from './WidgetStore';
 import { CardData } from './CardData';
 import { Log } from '../../common/Log';
 
+/** 本文件的日志 Tag —— 过滤日志时按它筛。 */
+const TAG: string = 'CardPublisher';
+
 /**
  * 卡片数据推送器。
  *
@@ -32,7 +35,7 @@ export class CardPublisher {
       const running = await formProvider.getPublishedRunningFormInfos();
       formIds = running.map((info) => info.formId);
     } catch (err) {
-      Log.warn(`获取已添加卡片失败: ${(err as Error).message}`);
+      Log.warn(TAG, `获取已添加卡片失败: ${(err as Error).message}`);
       return;
     }
     if (formIds.length === 0) {
@@ -47,10 +50,10 @@ export class CardPublisher {
         await formProvider.updateForm(formId, binding);
         await formProvider.setFormNextRefreshTime(formId, CardPublisher.refreshMinutes(snapshot));
       } catch (err) {
-        Log.warn(`推送卡片 ${formId} 失败: ${(err as Error).message}`);
+        Log.warn(TAG, `推送卡片 ${formId} 失败: ${(err as Error).message}`);
       }
     }
-    Log.info(`已推送 ${formIds.length} 张卡片`);
+    Log.info(TAG, `已推送 ${formIds.length} 张卡片`);
   }
 
   /**

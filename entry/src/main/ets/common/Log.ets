@@ -3,34 +3,35 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 /**
  * 统一日志出口。
  *
- * 与 Android 端保持一致的 Tag 前缀（"PolestarCompanion"），
- * 便于移植后与原版日志对照排查。
+ * 【Tag 约定】每个文件在自己的模块顶层定义一个 TAG 常量，值就是文件名
+ * （如 Index.ets 里是 `const TAG: string = 'Index'`），调用时传进去。
+ * 这样日志里能直接看出是哪个文件打的，过滤时按 Tag 筛即可。
  */
 export class Log {
-  private static readonly DOMAIN: number = 0x0000;
-  private static readonly TAG: string = 'PolestarCompanion';
+  /** 日志域，全应用统一。 */
+  static readonly DOMAIN: number = 0x0000;
 
-  static debug(message: string): void {
-    hilog.debug(Log.DOMAIN, Log.TAG, '%{public}s', message);
+  static debug(tag: string, message: string): void {
+    hilog.debug(Log.DOMAIN, tag, '%{public}s', message);
   }
 
-  static info(message: string): void {
-    hilog.info(Log.DOMAIN, Log.TAG, '%{public}s', message);
+  static info(tag: string, message: string): void {
+    hilog.info(Log.DOMAIN, tag, '%{public}s', message);
   }
 
-  static warn(message: string): void {
-    hilog.warn(Log.DOMAIN, Log.TAG, '%{public}s', message);
+  static warn(tag: string, message: string): void {
+    hilog.warn(Log.DOMAIN, tag, '%{public}s', message);
   }
 
-  static error(message: string): void {
-    hilog.error(Log.DOMAIN, Log.TAG, '%{public}s', message);
+  static error(tag: string, message: string): void {
+    hilog.error(Log.DOMAIN, tag, '%{public}s', message);
   }
 
   /**
    * 打印异常信息，保留原始错误码与消息。
    */
-  static errorWith(where: string, err: BusinessError): void {
-    hilog.error(Log.DOMAIN, Log.TAG, '%{public}s failed: code=%{public}d message=%{public}s',
+  static errorWith(tag: string, where: string, err: BusinessError): void {
+    hilog.error(Log.DOMAIN, tag, '%{public}s failed: code=%{public}d message=%{public}s',
       where, err.code, err.message);
   }
 

@@ -1,6 +1,9 @@
 import { BiometricGuard, BiometricResult } from './BiometricGuard';
 import { Log } from '../../common/Log';
 
+/** 本文件的日志 Tag —— 过滤日志时按它筛。 */
+const TAG: string = 'ForegroundLock';
+
 /**
  * 前台解锁守卫。
  *
@@ -26,7 +29,7 @@ export class ForegroundLock {
    */
   static markBackgrounded(): void {
     ForegroundLock.locked = true;
-    Log.info('应用退到后台，切回前台时需要指纹验证');
+    Log.info(TAG, '应用退到后台，切回前台时需要指纹验证');
   }
 
   /**
@@ -67,19 +70,19 @@ export class ForegroundLock {
       const capability = await BiometricGuard.checkAvailable();
       if (capability !== BiometricResult.SUCCESS) {
         // 没有指纹能力：直接放行，不给用户添堵
-        Log.info(`指纹不可用（code=${capability}），跳过前台解锁验证`);
+        Log.info(TAG, `指纹不可用（code=${capability}），跳过前台解锁验证`);
         ForegroundLock.unlock();
         return true;
       }
 
       const result = await BiometricGuard.verify(title);
       if (result === BiometricResult.SUCCESS) {
-        Log.info('指纹验证通过，前台期间免重复验证');
+        Log.info(TAG, '指纹验证通过，前台期间免重复验证');
         ForegroundLock.unlock();
         return true;
       }
 
-      Log.warn('用户取消指纹验证，保持锁定状态');
+      Log.warn(TAG, '用户取消指纹验证，保持锁定状态');
       return false;
     } finally {
       ForegroundLock.verifying = false;

@@ -6,6 +6,9 @@ import { SessionState } from '../model/SessionState';
 import { SessionStore } from './SessionStore';
 import { BusinessError, Log } from '../../common/Log';
 
+/** 本文件的日志 Tag —— 过滤日志时按它筛。 */
+const TAG: string = 'AuthService';
+
 /**
  * 账号登录与 token 续期 —— 对应 Android 端 p000.ga0 的
  * m1400E（密码登录）、m1412e0（刷新）。
@@ -76,7 +79,7 @@ export class AuthService {
     }
 
     if (session.accessToken.length === 0) {
-      Log.error('登录成功响应中没有 C3 global token');
+      Log.error(TAG, '登录成功响应中没有 C3 global token');
       throw new BusinessError(-1, '登录成功响应中没有 C3 global token');
     }
 
@@ -105,7 +108,7 @@ export class AuthService {
         session.accessToken = stored.accessToken;
         session.refreshToken = stored.refreshToken;
         session.expiresAt = stored.expiresAt;
-        Log.info('token already refreshed by another request');
+        Log.info(TAG, 'token already refreshed by another request');
         return;
       }
     }
@@ -115,7 +118,7 @@ export class AuthService {
         await SessionStore.clear(context);
         throw new BusinessError(401, '登录状态已失效，请重新登录');
       }
-      Log.info('refresh token unavailable; current access token remains valid');
+      Log.info(TAG, 'refresh token unavailable; current access token remains valid');
       return;
     }
 
@@ -123,7 +126,7 @@ export class AuthService {
     if (!force && session.expiresAt > now) {
       const retryAfter = await SessionStore.getRefreshRetryAfter(context);
       if (retryAfter > now) {
-        Log.info('refresh deferred after transient failure while current bearer is still valid');
+        Log.info(TAG, 'refresh deferred after transient failure while current bearer is still valid');
         return;
       }
     }
@@ -197,7 +200,7 @@ export class AuthService {
       if (!force && session.expiresAt > Date.now()) {
         const retryAt = Math.min(session.expiresAt, Date.now() + AuthService.MAX_RETRY_DELAY_MS);
         await SessionStore.setRefreshRetryAfter(context, retryAt);
-        Log.warn('refresh failed transiently; retaining still-valid bearer');
+        Log.warn(TAG, 'refresh failed transiently; retaining still-valid bearer');
         return;
       }
       if (err instanceof Error) {

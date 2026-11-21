@@ -1,6 +1,9 @@
 import { common, Want } from '@kit.AbilityKit';
 import { BusinessError, Log } from '../../common/Log';
 
+/** 本文件的日志 Tag —— 过滤日志时按它筛。 */
+const TAG: string = 'MapLauncher';
+
 /**
  * 打开系统地图，定位到停车坐标。
  *
@@ -41,11 +44,11 @@ export class MapLauncher {
 
     try {
       await context.startAbility(want);
-      Log.info(`已拉起系统地图: ${uri}`);
+      Log.info(TAG, `已拉起系统地图: ${uri}`);
       return true;
     } catch (err) {
       const e = err as BusinessError;
-      Log.warn(`拉起系统地图失败: code=${e.code} ${e.message}`);
+      Log.warn(TAG, `拉起系统地图失败: code=${e.code} ${e.message}`);
       return false;
     }
   }

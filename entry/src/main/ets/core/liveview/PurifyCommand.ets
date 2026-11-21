@@ -5,6 +5,9 @@ import { VehicleCommands } from '../net/VehicleCommands';
 import { LiveViewManager } from './LiveViewManager';
 import { BusinessError, Log } from '../../common/Log';
 
+/** 本文件的日志 Tag —— 过滤日志时按它筛。 */
+const TAG: string = 'PurifyCommand';
+
 /**
  * 实况窗「停止净化」的静默执行链路。
  *
@@ -57,20 +60,20 @@ export class PurifyCommand {
       await repository.loadSession();
       const vins = await repository.fetchVehicles();
       if (vins.length === 0) {
-        Log.warn('实况窗停止净化：账号下没有车辆');
+        Log.warn(TAG, '实况窗停止净化：账号下没有车辆');
         return;
       }
       vin = vins[0];
     } catch (err) {
       const e = err as BusinessError;
-      Log.warn(`实况窗停止净化：会话不可用 code=${e.code} ${e.message}`);
+      Log.warn(TAG, `实况窗停止净化：会话不可用 code=${e.code} ${e.message}`);
       return;
     }
 
     const session = repository.getSession();
     const client = repository.getClient();
     if (session === undefined || client === undefined) {
-      Log.warn('实况窗停止净化：会话未就绪');
+      Log.warn(TAG, '实况窗停止净化：会话未就绪');
       return;
     }
 
@@ -81,12 +84,12 @@ export class PurifyCommand {
       await coordinator.execute(vin, VehicleCommands.ACTION_AIR_STOP, (success: boolean, message: string) => {
         sent = success;
         if (!success) {
-          Log.warn(`实况窗停止净化：指令下发失败 ${message}`);
+          Log.warn(TAG, `实况窗停止净化：指令下发失败 ${message}`);
         }
       });
     } catch (err) {
       const e = err as BusinessError;
-      Log.warn(`实况窗停止净化：指令下发异常 code=${e.code} ${e.message}`);
+      Log.warn(TAG, `实况窗停止净化：指令下发异常 code=${e.code} ${e.message}`);
       return;
     }
     if (!sent) {
@@ -98,13 +101,13 @@ export class PurifyCommand {
     const confirmed = await PurifyCommand.confirmClosed(repository, vin);
     if (!confirmed) {
       // 车端还没推进到终态 —— 指令确实已下发，实况窗先留着
-      Log.info('实况窗停止净化：指令已发送，等待车端确认');
+      Log.info(TAG, '实况窗停止净化：指令已发送，等待车端确认');
       return;
     }
 
     // 4. 确认关闭 —— 销毁实况窗
     await LiveViewManager.stop(context);
-    Log.info('实况窗停止净化：车端已关闭，实况窗已销毁');
+    Log.info(TAG, '实况窗停止净化：车端已关闭，实况窗已销毁');
   }
 
   /**
@@ -126,7 +129,7 @@ export class PurifyCommand {
           return true;
         }
       } catch (err) {
-        Log.warn(`实况窗停止净化：状态读取失败 ${(err as Error).message}`);
+        Log.warn(TAG, `实况窗停止净化：状态读取失败 ${(err as Error).message}`);
       }
     }
     return false;

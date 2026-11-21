@@ -4,6 +4,9 @@ import { SessionState } from '../model/SessionState';
 import { TokenVault } from './TokenVault';
 import { Log } from '../../common/Log';
 
+/** 本文件的日志 Tag —— 过滤日志时按它筛。 */
+const TAG: string = 'SessionStore';
+
 /**
  * 会话持久化 —— 对应 Android 端 ga0.m1346B / m1383p0 / m1419v。
  *
@@ -68,7 +71,7 @@ export class SessionStore {
       const session = SessionState.fromPlaintext(SessionStore.utf8Decode(plain));
       return session;
     } catch (err) {
-      Log.warn(`读取会话失败: ${(err as Error).message}`);
+      Log.warn(TAG, `读取会话失败: ${(err as Error).message}`);
       return undefined;
     }
   }

@@ -1,6 +1,9 @@
-﻿import { socket } from '@kit.NetworkKit';
+import { socket } from '@kit.NetworkKit';
 import { BusinessError, Log } from '../../../common/Log';
 import { FrameType, FrameFlag, Http2Frame, Http2FrameInfo, Hpack, HttpHeader } from './Http2Frame';
+
+/** 本文件的日志 Tag —— 过滤日志时按它筛。 */
+const TAG: string = 'GrpcChannel';
 
 /**
  * gRPC 通道 —— 基于 TLSSocket + ALPN h2 的自研轻量实现。
@@ -116,14 +119,14 @@ export class GrpcChannel {
     tls.on('close', () => {
       this.ready = false;
       const reason = '连接已关闭';
-      Log.warn(`gRPC 通道 ${this.host} ${reason}`);
+      Log.warn(TAG, `gRPC 通道 ${this.host} ${reason}`);
       if (this.onClose !== undefined) {
         this.onClose(reason);
       }
     });
     tls.on('error', (err: BusinessError) => {
       this.ready = false;
-      Log.error(`gRPC 通道错误 ${this.host}: code=${err.code} ${err.message}`);
+      Log.error(TAG, `gRPC 通道错误 ${this.host}: code=${err.code} ${err.message}`);
       if (this.onClose !== undefined) {
         this.onClose(err.message);
       }
@@ -144,10 +147,10 @@ export class GrpcChannel {
     // 记录协商到的 TLS 协议版本，便于排查握手问题
     try {
       const protocol = await tls.getProtocol();
-      Log.info(`gRPC 通道已建立: ${this.host} (TLS ${protocol})`);
+      Log.info(TAG, `gRPC 通道已建立: ${this.host} (TLS ${protocol})`);
     } catch (err) {
       const e = err as BusinessError;
-      Log.info(`gRPC 通道已建立: ${this.host} (协议版本未知: ${e.message})`);
+      Log.info(TAG, `gRPC 通道已建立: ${this.host} (协议版本未知: ${e.message})`);
     }
   }
 
@@ -178,9 +181,9 @@ export class GrpcChannel {
     // 等服务端 SETTINGS
     const serverSettings = await this.waitServerSettings();
     if (serverSettings) {
-      Log.info(`收到服务端 SETTINGS，ALPN 协商为 h2`);
+      Log.info(TAG, `收到服务端 SETTINGS，ALPN 协商为 h2`);
     } else {
-      Log.warn(`未收到服务端 SETTINGS，ALPN 很可能未协商为 h2，继续发送 preface`);
+      Log.warn(TAG, `未收到服务端 SETTINGS，ALPN 很可能未协商为 h2，继续发送 preface`);
     }
     await this.sendPreface();
     this.handshakeDone = true;
@@ -242,7 +245,7 @@ export class GrpcChannel {
     tls.on('message', (info: socket.SocketMessageInfo) => {
       const bytes = new Uint8Array(info.message);
       received += bytes.length;
-      Log.error(`诊断连接收到 ${bytes.length} 字节: ${GrpcChannel.hexPreview(bytes)}`);
+      Log.error(TAG, `诊断连接收到 ${bytes.length} 字节: ${GrpcChannel.hexPreview(bytes)}`);
     });
     try {
       await tls.bind({ address: '0.0.0.0', port: 0 });
@@ -258,14 +261,14 @@ export class GrpcChannel {
         buf[i] = req.charCodeAt(i);
       }
       await tls.send(buf.buffer as ArrayBuffer);
-      Log.error('诊断连接已发送 HTTP/1.1 GET，等待 3s');
+      Log.error(TAG, '诊断连接已发送 HTTP/1.1 GET，等待 3s');
       setTimeout(() => {
-        Log.error(`诊断连接 3s 内共收到 ${received} 字节`);
+        Log.error(TAG, `诊断连接 3s 内共收到 ${received} 字节`);
         tls.close();
       }, 3000);
     } catch (err) {
       const e = err as BusinessError;
-      Log.error(`诊断连接失败: code=${e.code} ${e.message}`);
+      Log.error(TAG, `诊断连接失败: code=${e.code} ${e.message}`);
     }
   }
 
@@ -357,10 +360,10 @@ export class GrpcChannel {
    */
   private onData(chunk: Uint8Array): void {
     this.receivedBytes += chunk.length;
-    Log.info(`gRPC 收到 ${chunk.length} 字节: ${GrpcChannel.hexPreview(chunk)}`);
+    Log.info(TAG, `gRPC 收到 ${chunk.length} 字节: ${GrpcChannel.hexPreview(chunk)}`);
     // 服务端若回 HTTP/1.x 文本（'HTT'），说明 ALPN 没协商成 h2
     if (chunk.length >= 3 && chunk[0] === 0x48 && chunk[1] === 0x54 && chunk[2] === 0x54) {
-      Log.error('服务端返回 HTTP/1.x 文本，ALPN 未协商为 h2');
+      Log.error(TAG, '服务端返回 HTTP/1.x 文本，ALPN 未协商为 h2');
     }
     const merged = new Uint8Array(this.recvBuffer.length + chunk.length);
     merged.set(this.recvBuffer, 0);
@@ -396,7 +399,7 @@ export class GrpcChannel {
    * 处理一个 HTTP/2 帧。
    */
   private handleFrame(frame: Http2FrameInfo): void {
-    Log.info(`gRPC 帧 type=${frame.header.type} flags=${frame.header.flags} stream=${frame.header.streamId} len=${frame.payload.length}`);
+    Log.info(TAG, `gRPC 帧 type=${frame.header.type} flags=${frame.header.flags} stream=${frame.header.streamId} len=${frame.payload.length}`);
     switch (frame.header.type) {
       case FrameType.SETTINGS:
         if ((frame.header.flags & 0x01) !== 0) {
@@ -464,7 +467,7 @@ export class GrpcChannel {
         const view = new DataView(frame.payload.buffer, frame.payload.byteOffset, frame.payload.byteLength);
         const errorCode = frame.payload.length >= 8 ? view.getUint32(4, false) : 0;
         const reason = `gRPC 服务端关闭连接: GOAWAY errorCode=${errorCode}`;
-        Log.warn(reason);
+        Log.warn(TAG, reason);
         for (const call of this.pending.values()) {
           clearTimeout(call.timer);
           call.reject(new BusinessError(errorCode, reason));
@@ -526,9 +529,9 @@ export class GrpcChannel {
         return;
       }
       await tls.send(buffer);
-      Log.debug(`gRPC 发送 ${buffer.byteLength} 字节`);
+      Log.debug(TAG, `gRPC 发送 ${buffer.byteLength} 字节`);
     }).catch((err: BusinessError) => {
-      Log.error(`gRPC 发送失败: code=${err.code} ${err.message}`);
+      Log.error(TAG, `gRPC 发送失败: code=${err.code} ${err.message}`);
     });
     return this.writeChain;
   }

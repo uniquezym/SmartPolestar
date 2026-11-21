@@ -2,6 +2,9 @@ import { HttpClient } from './HttpClient';
 import { SessionState } from '../model/SessionState';
 import { BusinessError, Log } from '../../common/Log';
 
+/** 本文件的日志 Tag —— 过滤日志时按它筛。 */
+const TAG: string = 'ServiceDiscovery';
+
 /**
  * 服务发现结果。
  */
@@ -49,11 +52,11 @@ export class ServiceDiscovery {
       if (session.c3Host.length === 0) {
         const c3 = root['c3'] as Record<string, Object> | undefined;
         if (c3 === undefined) {
-          Log.error('C3 服务发现没有返回主服务');
+          Log.error(TAG, 'C3 服务发现没有返回主服务');
         } else {
           session.c3Host = (c3['grpcHost'] as string) ?? '';
           if (!ServiceDiscovery.isTrustedHost(session.c3Host)) {
-            Log.error('C3 服务发现返回了无效主机名');
+            Log.error(TAG, 'C3 服务发现返回了无效主机名');
           }
         }
       }
@@ -61,11 +64,11 @@ export class ServiceDiscovery {
       if (session.c3LbsHost.length === 0) {
         const lbs = root['c3Lbs'] as Record<string, Object> | undefined;
         if (lbs === undefined) {
-          Log.error('C3 服务发现没有返回 LBS 主机');
+          Log.error(TAG, 'C3 服务发现没有返回 LBS 主机');
         } else {
           session.c3LbsHost = (lbs['grpcHost'] as string) ?? '';
           if (!ServiceDiscovery.isTrustedHost(session.c3LbsHost)) {
-            Log.error('C3 服务发现返回了无效 LBS 主机名');
+            Log.error(TAG, 'C3 服务发现返回了无效 LBS 主机名');
           }
         }
       }

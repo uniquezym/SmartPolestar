@@ -3,6 +3,9 @@ import { VehicleStateReader } from '../net/VehicleStateReader';
 import { VehicleState } from '../model/VehicleState';
 import { Log } from '../../common/Log';
 
+/** 本文件的日志 Tag —— 过滤日志时按它筛。 */
+const TAG: string = 'VehicleStateStream';
+
 /**
  * 状态域标识。
  */
@@ -159,7 +162,7 @@ export class VehicleStateStream {
             this.onUpdate?.(spec.domain, this.state);
           } catch (err) {
             const e = err as Error;
-            Log.warn(`流式状态解析失败(${spec.domain}): ${e.message}`);
+            Log.warn(TAG, `流式状态解析失败(${spec.domain}): ${e.message}`);
           }
         },
         (message: string) => {
@@ -175,7 +178,7 @@ export class VehicleStateStream {
       this.cancels.set(spec.domain, cancel);
     }
 
-    Log.info(`已订阅 ${this.cancels.size} 个状态流`);
+    Log.info(TAG, `已订阅 ${this.cancels.size} 个状态流`);
   }
 
   /**
@@ -202,7 +205,7 @@ export class VehicleStateStream {
     });
     this.cancels.clear();
     this.brokenDomains = [];
-    Log.info('已取消全部状态流订阅');
+    Log.info(TAG, '已取消全部状态流订阅');
   }
 
   /**

@@ -2,6 +2,9 @@ import { webview } from '@kit.ArkWeb';
 import { AppIcon, AppIconName } from '../components/Icons';
 import { Log } from '../common/Log';
 
+/** 本文件的日志 Tag —— 过滤日志时按它筛。 */
+const TAG: string = 'Map';
+
 /**
  * 内置地图页 —— 系统地图拉起失败时的兜底。
  *
@@ -81,7 +84,7 @@ struct Map {
         .layoutWeight(1)
         .javaScriptAccess(true)
         .onErrorReceive((event) => {
-          Log.warn('地图页面加载失败');
+          Log.warn(TAG, '地图页面加载失败');
         })
     }
     .width('100%')

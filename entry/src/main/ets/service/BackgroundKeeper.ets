@@ -2,6 +2,9 @@ import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
 import { wantAgent, common, WantAgent } from '@kit.AbilityKit';
 import { BusinessError, Log } from '../common/Log';
 
+/** 本文件的日志 Tag —— 过滤日志时按它筛。 */
+const TAG: string = 'BackgroundKeeper';
+
 /**
  * 长时任务维持器 —— 对应 Android 端的前台服务 + 常驻通知。
  *
@@ -49,12 +52,12 @@ export class BackgroundKeeper {
 
       await backgroundTaskManager.startBackgroundRunning(context, request);
       BackgroundKeeper.running = true;
-      Log.info('长时任务已启动: MODE_BLUETOOTH_INTERACTION');
+      Log.info(TAG, '长时任务已启动: MODE_BLUETOOTH_INTERACTION');
       return true;
     } catch (err) {
       const e = err as BusinessError;
       // 常见失败：未授予 KEEP_BACKGROUND_RUNNING、系统繁忙
-      Log.warn(`长时任务申请失败: code=${e.code} ${e.message}`);
+      Log.warn(TAG, `长时任务申请失败: code=${e.code} ${e.message}`);
       return false;
     }
   }
@@ -69,10 +72,10 @@ export class BackgroundKeeper {
     try {
       await backgroundTaskManager.stopBackgroundRunning(context);
       BackgroundKeeper.running = false;
-      Log.info('长时任务已停止');
+      Log.info(TAG, '长时任务已停止');
     } catch (err) {
       const e = err as BusinessError;
-      Log.warn(`长时任务停止失败: code=${e.code} ${e.message}`);
+      Log.warn(TAG, `长时任务停止失败: code=${e.code} ${e.message}`);
     }
   }
 

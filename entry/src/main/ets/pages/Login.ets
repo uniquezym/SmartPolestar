@@ -2,6 +2,9 @@ import { common } from '@kit.AbilityKit';
 import { AuthService } from '../core/session/AuthService';
 import { Log } from '../common/Log';
 
+/** 本文件的日志 Tag —— 过滤日志时按它筛。 */
+const TAG: string = 'Login';
+
 /**
  * 登录页。
  *
@@ -42,12 +45,12 @@ struct Login {
     this.errorMessage = '';
     try {
       await AuthService.login(this.context, this.phone, this.password);
-      Log.info('登录成功');
+      Log.info(TAG, '登录成功');
       this.getUIContext().getRouter().replaceUrl({ url: 'pages/Index' });
     } catch (err) {
       const e = err as Error;
       this.errorMessage = e.message.length > 0 ? e.message : '账号登录失败';
-      Log.error(`登录失败: ${e.message}`);
+      Log.error(TAG, `登录失败: ${e.message}`);
     } finally {
       this.submitting = false;
     }

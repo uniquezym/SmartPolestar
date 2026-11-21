@@ -3,6 +3,9 @@ import { connection } from '@kit.NetworkKit';
 import { BusinessError, Log } from '../../../common/Log';
 import { GrpcMessageParser } from './GrpcMessageParser';
 
+/** 本文件的日志 Tag —— 过滤日志时按它筛。 */
+const TAG: string = 'GrpcRcpChannel';
+
 /**
  * gRPC unary 调用的 RCP 传输层。
  *
@@ -125,11 +128,11 @@ export class GrpcRcpChannel {
       const ips: string[] = v4.length > 0 ? v4 : v6;
       if (ips.length > 0) {
         this.resolvedIps = ips;
-        Log.info(`RCP DNS ${this.host} => ${ips.join(', ')}`);
+        Log.info(TAG, `RCP DNS ${this.host} => ${ips.join(', ')}`);
       }
     } catch (err) {
       const e = err as BusinessError;
-      Log.warn(`RCP DNS 解析失败 ${this.host}: code=${e.code} ${e.message}`);
+      Log.warn(TAG, `RCP DNS 解析失败 ${this.host}: code=${e.code} ${e.message}`);
     }
   }
 
@@ -266,7 +269,7 @@ export class GrpcRcpChannel {
         }
       } catch (err) {
         const e = err as BusinessError;
-        Log.warn(`gRPC 流解析失败 ${fullMethod}: ${e.message}`);
+        Log.warn(TAG, `gRPC 流解析失败 ${fullMethod}: ${e.message}`);
       }
     };
 
@@ -279,7 +282,7 @@ export class GrpcRcpChannel {
       const status = response.statusCode;
       const grpcStatus = GrpcRcpChannel.headerValue(response.headers['grpc-status']);
       const grpcMessage = GrpcRcpChannel.headerValue(response.headers['grpc-message']);
-      Log.info(`gRPC 流(RCP) ${fullMethod} 结束 status=${status} grpcStatus=${grpcStatus} ` +
+      Log.info(TAG, `gRPC 流(RCP) ${fullMethod} 结束 status=${status} grpcStatus=${grpcStatus} ` +
         `消息数=${parser.getMessageCount()}`);
       if (status === 200 && (grpcStatus.length === 0 || grpcStatus === '0')) {
         onEnd(null);
@@ -290,7 +293,7 @@ export class GrpcRcpChannel {
       if (canceled) {
         return;
       }
-      Log.warn(`gRPC 流(RCP) ${fullMethod} 异常: code=${err.code} ${err.message}`);
+      Log.warn(TAG, `gRPC 流(RCP) ${fullMethod} 异常: code=${err.code} ${err.message}`);
       onEnd(err.message);
     });
 
@@ -304,7 +307,7 @@ export class GrpcRcpChannel {
         session.cancel(request);
       } catch (err) {
         const e = err as BusinessError;
-        Log.warn(`取消 gRPC 流失败 ${fullMethod}: ${e.message}`);
+        Log.warn(TAG, `取消 gRPC 流失败 ${fullMethod}: ${e.message}`);
       }
     };
   }
@@ -367,7 +370,7 @@ export class GrpcRcpChannel {
         const status = response.statusCode;
         const grpcStatus = GrpcRcpChannel.headerValue(response.headers['grpc-status']);
         const grpcMessage = GrpcRcpChannel.headerValue(response.headers['grpc-message']);
-        Log.info(`gRPC(RCP) ${fullMethod} status=${status} httpVer=${response.httpVersion ?? 'unknown'} grpcStatus=${grpcStatus} grpcMessage=${grpcMessage}`);
+        Log.info(TAG, `gRPC(RCP) ${fullMethod} status=${status} httpVer=${response.httpVersion ?? 'unknown'} grpcStatus=${grpcStatus} grpcMessage=${grpcMessage}`);
 
         // gRPC 一元调用：HTTP 200 + grpc-status 0 才算成功。
         // grpc-status 正常由 HTTP/2 trailers 携带，RCP 会合并进 headers。
@@ -376,7 +379,7 @@ export class GrpcRcpChannel {
         }
 
         if (status !== 200) {
-          Log.error(`gRPC(RCP) ${fullMethod} status=${status} 响应头=${JSON.stringify(response.headers)}`);
+          Log.error(TAG, `gRPC(RCP) ${fullMethod} status=${status} 响应头=${JSON.stringify(response.headers)}`);
           if (status === 401 || status === 403) {
             throw new BusinessError(status, `UNAUTHENTICATED: HTTP ${status}`);
           }
@@ -386,7 +389,7 @@ export class GrpcRcpChannel {
         const body = response.body;
         if (body === undefined || body.byteLength === 0) {
           // 服务端只回了 trailers（grpc-status 0）而没有消息体
-          Log.warn(`gRPC(RCP) ${fullMethod} 响应体为空（grpc-status=${grpcStatus}）`);
+          Log.warn(TAG, `gRPC(RCP) ${fullMethod} 响应体为空（grpc-status=${grpcStatus}）`);
           return new Uint8Array(0);
         }
 
@@ -400,7 +403,7 @@ export class GrpcRcpChannel {
             return raw.slice(5);
           }
           // 不是帧头，按裸 protobuf 处理
-          Log.warn(`gRPC(RCP) ${fullMethod} 帧头长度不符: 声明 ${declared} 实际 ${raw.length}，按裸 protobuf 解析`);
+          Log.warn(TAG, `gRPC(RCP) ${fullMethod} 帧头长度不符: 声明 ${declared} 实际 ${raw.length}，按裸 protobuf 解析`);
         }
         return raw;
       } catch (err) {
@@ -410,7 +413,7 @@ export class GrpcRcpChannel {
         }
         // 传输层故障：换一个 IP 重建会话再试一次
         lastError = e;
-        Log.warn(`gRPC(RCP) ${fullMethod} 传输失败 code=${e.code} ${e.message}，更换节点重试`);
+        Log.warn(TAG, `gRPC(RCP) ${fullMethod} 传输失败 code=${e.code} ${e.message}，更换节点重试`);
         this.close();
         // 轮换 IP 顺序后重建会话，让下一次尝试优先连另一个节点
         this.rotateIps();

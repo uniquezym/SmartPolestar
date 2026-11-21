@@ -1,6 +1,9 @@
 import { userAuth } from '@kit.UserAuthenticationKit';
 import { BusinessError, Log } from '../../common/Log';
 
+/** 本文件的日志 Tag —— 过滤日志时按它筛。 */
+const TAG: string = 'BiometricGuard';
+
 /**
  * 生物识别验证结果码。
  *
@@ -44,7 +47,7 @@ export class BiometricGuard {
       return BiometricResult.NOT_ENROLLED;
     } catch (err) {
       const e = err as BusinessError;
-      Log.warn(`检查生物特征可用性失败: code=${e.code} ${e.message}`);
+      Log.warn(TAG, `检查生物特征可用性失败: code=${e.code} ${e.message}`);
       if (e.code === 12500010) {
         // 该类型尚未录入
         return BiometricResult.NOT_ENROLLED;
@@ -85,7 +88,7 @@ export class BiometricGuard {
       return userAuth.getUserAuthInstance(authParam, widgetParam);
     } catch (err) {
       const e = err as BusinessError;
-      Log.warn(`创建生物识别实例失败: code=${e.code} ${e.message}`);
+      Log.warn(TAG, `创建生物识别实例失败: code=${e.code} ${e.message}`);
       return undefined;
     }
   }
@@ -114,7 +117,7 @@ export class BiometricGuard {
         instance.start();
       } catch (err) {
         const e = err as BusinessError;
-        Log.warn(`生物识别验证异常: code=${e.code} ${e.message}`);
+        Log.warn(TAG, `生物识别验证异常: code=${e.code} ${e.message}`);
         resolve(BiometricResult.FAILED);
       }
     });

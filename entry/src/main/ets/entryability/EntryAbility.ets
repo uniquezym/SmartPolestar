@@ -3,11 +3,14 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { router, window } from '@kit.ArkUI';
 import { BusinessError, commonEventManager } from '@kit.BasicServicesKit';
 import { BackgroundKeeper } from '../service/BackgroundKeeper';
+import { BackgroundReset } from '../core/app/BackgroundReset';
 import { CardIntent } from '../core/vehicle/CardIntent';
 import { LiveViewData } from '../core/liveview/LiveViewData';
 import { PurifyCommand } from '../core/liveview/PurifyCommand';
+import { Log } from '../common/Log';
 
-const DOMAIN = 0x0000;
+/** 本文件的日志 Tag —— 过滤日志时按它筛。 */
+const TAG: string = 'EntryAbility';
 
 export default class EntryAbility extends UIAbility {
   /**
@@ -28,14 +31,14 @@ export default class EntryAbility extends UIAbility {
     try {
       this.context.getApplicationContext().setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
     } catch (err) {
-      hilog.error(DOMAIN, 'testTag', 'Failed to set colorMode. Cause: %{public}s', JSON.stringify(err));
+      hilog.error(Log.DOMAIN, TAG, 'Failed to set colorMode. Cause: %{public}s', JSON.stringify(err));
     }
     this.cardControl = EntryAbility.cardControlOf(want);
     if (this.cardControl.length > 0) {
       // 控制项通过进程内通道传给确认页 —— loadContent 没有路由 params 重载
       CardIntent.set(this.cardControl);
     }
-    hilog.info(DOMAIN, 'testTag', 'Ability onCreate');
+    hilog.info(Log.DOMAIN, TAG, 'Ability onCreate');
     this.subscribePurifyStop();
   }
 
@@ -56,28 +59,28 @@ export default class EntryAbility extends UIAbility {
       };
       const subscriber = commonEventManager.createSubscriberSync(info);
       commonEventManager.subscribeToEvent(subscriber, (data: commonEventManager.CommonEventData) => {
-        hilog.info(DOMAIN, 'testTag', '收到实况窗停止净化事件');
+        hilog.info(Log.DOMAIN, TAG, '收到实况窗停止净化事件');
         PurifyCommand.stop(this.context as common.UIAbilityContext).catch((err: Error) => {
-          hilog.error(DOMAIN, 'testTag', '停止净化失败. Cause: %{public}s', err.message);
+          hilog.error(Log.DOMAIN, TAG, '停止净化失败. Cause: %{public}s', err.message);
         });
       }).catch((err: BusinessError) => {
-        hilog.error(DOMAIN, 'testTag', '订阅停止净化事件失败. Cause: %{public}s', err.message);
+        hilog.error(Log.DOMAIN, TAG, '订阅停止净化事件失败. Cause: %{public}s', err.message);
       });
       this.purifySubscriber = subscriber;
     } catch (err) {
       const e = err as BusinessError;
-      hilog.error(DOMAIN, 'testTag', '订阅停止净化事件异常. Cause: %{public}s', e.message);
+      hilog.error(Log.DOMAIN, TAG, '订阅停止净化事件异常. Cause: %{public}s', e.message);
     }
   }
 
   onDestroy(): void {
-    hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onDestroy');
+    hilog.info(Log.DOMAIN, TAG, '%{public}s', 'Ability onDestroy');
     BackgroundKeeper.stop(this.context);
   }
 
   onWindowStageCreate(windowStage: window.WindowStage): void {
     // Main window is created, set main page for this ability
-    hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onWindowStageCreate');
+    hilog.info(Log.DOMAIN, TAG, '%{public}s', 'Ability onWindowStageCreate');
     this.windowStage = windowStage;
 
     // 卡片触发的车控请求直接进确认页；正常启动进概览页
@@ -85,10 +88,10 @@ export default class EntryAbility extends UIAbility {
 
     windowStage.loadContent(page, (err: BusinessError) => {
       if (err.code) {
-        hilog.error(DOMAIN, 'testTag', 'Failed to load the content. Cause: %{public}s', JSON.stringify(err));
+        hilog.error(Log.DOMAIN, TAG, 'Failed to load the content. Cause: %{public}s', JSON.stringify(err));
         return;
       }
-      hilog.info(DOMAIN, 'testTag', 'Succeeded in loading the content.');
+      hilog.info(Log.DOMAIN, TAG, 'Succeeded in loading the content.');
     });
   }
 
@@ -101,7 +104,7 @@ export default class EntryAbility extends UIAbility {
       return;
     }
     this.cardControl = control;
-    hilog.info(DOMAIN, 'testTag', 'Ability onNewWant, card control: %{public}s', control);
+    hilog.info(Log.DOMAIN, TAG, 'Ability onNewWant, card control: %{public}s', control);
     CardIntent.set(control);
     this.pushControlPage();
   }
@@ -120,7 +123,7 @@ export default class EntryAbility extends UIAbility {
       const options: router.RouterOptions = { url: 'pages/CardControl' };
       stage.getMainWindowSync().getUIContext().getRouter().pushUrl(options);
     } catch (err) {
-      hilog.error(DOMAIN, 'testTag', 'Failed to push control page. Cause: %{public}s', JSON.stringify(err));
+      hilog.error(Log.DOMAIN, TAG, 'Failed to push control page. Cause: %{public}s', JSON.stringify(err));
     }
   }
 
@@ -142,25 +145,47 @@ export default class EntryAbility extends UIAbility {
       const control = params['control'] as string;
       return (control === 'lock' || control === 'climate') ? control : '';
     } catch (err) {
-      hilog.error(DOMAIN, 'testTag', 'Failed to parse card params. Cause: %{public}s', JSON.stringify(err));
+      hilog.error(Log.DOMAIN, TAG, 'Failed to parse card params. Cause: %{public}s', JSON.stringify(err));
       return '';
     }
   }
 
   onWindowStageDestroy(): void {
     // Main window is destroyed, release UI related resources
-    hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onWindowStageDestroy');
+    hilog.info(Log.DOMAIN, TAG, '%{public}s', 'Ability onWindowStageDestroy');
   }
 
   onForeground(): void {
     // Ability has brought to foreground
-    hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onForeground');
+    hilog.info(Log.DOMAIN, TAG, 'Ability onForeground');
     // 申请长时任务：保证退到后台后 BLE 扫描与传感器采样不被回收
     BackgroundKeeper.start(this.context);
+    // 这里只打日志，不做路由跳转 —— onForeground 时 UI 还没恢复前台，
+    // router 指令会被丢弃。实际跳转让页面自己的 onPageShow 来做。
+    BackgroundReset.onForeground();
   }
 
   onBackground(): void {
     // Ability has back to background
-    hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onBackground');
+    hilog.info(Log.DOMAIN, TAG, 'Ability onBackground');
+    // 记下进入后台时停在哪个页面 —— 只有那个页面恢复时才需要 back 回概览页。
+    BackgroundReset.onBackground(this.currentPageName());
+  }
+
+  /**
+   * 当前栈顶页面的名字。
+   *
+   * 取不到时返回空串 —— 此时不做页面级判断。
+   */
+  private currentPageName(): string {
+    const stage = this.windowStage;
+    if (stage === undefined) {
+      return '';
+    }
+    try {
+      return stage.getMainWindowSync().getUIContext().getRouter().getState().name;
+    } catch (err) {
+      return '';
+    }
   }
 }

@@ -1,6 +1,9 @@
 import { http } from '@kit.NetworkKit';
 import { BusinessError, Log } from '../../common/Log';
 
+/** 本文件的日志 Tag —— 过滤日志时按它筛。 */
+const TAG: string = 'HttpClient';
+
 /**
  * 通用 REST 客户端 —— 对应 Android 端 p000.ga0.m1370g0。
  *
@@ -66,7 +69,7 @@ export class HttpClient {
         : JSON.stringify(response.result);
 
       const path = HttpClient.pathOf(url);
-      Log.debug(`API ${method} ${path} status=${response.responseCode} bytes=${text.length}`);
+      Log.debug(TAG, `API ${method} ${path} status=${response.responseCode} bytes=${text.length}`);
 
       if (response.responseCode < 200 || response.responseCode >= 300) {
         throw new BusinessError(response.responseCode, `HTTP ${response.responseCode} ${path}`);

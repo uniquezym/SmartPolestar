@@ -3,6 +3,9 @@ import { site } from '@kit.MapKit';
 import { BusinessError, Log } from '../../common/Log';
 import { ParkedPlaceInfo } from './ParkedPlaceInfo';
 
+/** 本文件的日志 Tag —— 过滤日志时按它筛。 */
+const TAG: string = 'MapKitPlaceResolver';
+
 /**
  * Map Kit 逆地理编码 —— 拿停车点的 AOI / POI / 道路名。
  *
@@ -46,12 +49,12 @@ export class MapKitPlaceResolver {
 
       const result = await site.reverseGeocode(context, params);
       const info = MapKitPlaceResolver.pick(result);
-      Log.info(`Map Kit 反查结果: ${info.displayName()} | ${MapKitPlaceResolver.dump(result)}`);
+      Log.info(TAG, `Map Kit 反查结果: ${info.displayName()} | ${MapKitPlaceResolver.dump(result)}`);
       return info;
     } catch (err) {
       const e = err as BusinessError;
       // 权益未开通 / 鉴权失败时降级到系统逆地理编码，不打断概览页。
-      Log.warn(`Map Kit 反查失败: code=${e.code} ${e.message}`);
+      Log.warn(TAG, `Map Kit 反查失败: code=${e.code} ${e.message}`);
       return undefined;
     }
   }

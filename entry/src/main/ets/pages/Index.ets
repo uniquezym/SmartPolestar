@@ -22,6 +22,10 @@ import { StateDomain } from '../core/vehicle/VehicleStateStream';
 import { LiveViewManager } from '../core/liveview/LiveViewManager';
 import { AirPurifyLiveData } from '../core/liveview/LiveViewData';
 import { BusinessError, Log } from '../common/Log';
+import { BackgroundReset } from '../core/app/BackgroundReset';
+
+/** 本文件的日志 Tag —— 过滤日志时按它筛。 */
+const TAG: string = 'Index';
 
 /**
  * 状态行的片段类型，决定该片段的排版层级。
@@ -745,7 +749,7 @@ struct Index {
     this.chargeTimer = setInterval(() => {
       this.pollBattery();
     }, Index.CHARGE_POLL_INTERVAL_MS);
-    Log.info('充电中：启动电池状态轮询');
+    Log.info(TAG, '充电中：启动电池状态轮询');
   }
 
   /**
@@ -755,7 +759,7 @@ struct Index {
     if (this.chargeTimer !== -1) {
       clearInterval(this.chargeTimer);
       this.chargeTimer = -1;
-      Log.info('停止电池状态轮询');
+      Log.info(TAG, '停止电池状态轮询');
     }
   }
 
@@ -792,7 +796,7 @@ struct Index {
     this.locationTimer = setInterval(() => {
       this.pollParkedLocation();
     }, Index.LOCATION_POLL_INTERVAL_MS);
-    Log.info('启动最后停车位置轮询');
+    Log.info(TAG, '启动最后停车位置轮询');
   }
 
   /**
@@ -802,7 +806,7 @@ struct Index {
     if (this.locationTimer !== -1) {
       clearInterval(this.locationTimer);
       this.locationTimer = -1;
-      Log.info('停止最后停车位置轮询');
+      Log.info(TAG, '停止最后停车位置轮询');
     }
   }
 
@@ -826,7 +830,7 @@ struct Index {
     } catch (err) {
       const e = err as BusinessError;
       // 静默失败：轮询出错不该打扰用户，也不该把整页刷成错误态
-      Log.warn(`最后停车位置轮询失败: code=${e.code} ${e.message}`);
+      Log.warn(TAG, `最后停车位置轮询失败: code=${e.code} ${e.message}`);
     } finally {
       this.locationPolling = false;
     }
@@ -861,7 +865,7 @@ struct Index {
     } catch (err) {
       const e = err as BusinessError;
       // 静默失败：轮询出错不该打扰用户，也不该把整页刷成错误态
-      Log.warn(`充电轮询失败: code=${e.code} ${e.message}`);
+      Log.warn(TAG, `充电轮询失败: code=${e.code} ${e.message}`);
     } finally {
       this.chargePolling = false;
       // 充电状态可能已变化（充满后转为已完成），据此启停轮询
@@ -957,7 +961,7 @@ struct Index {
     const running = climateOn
       ? `空调=开启 剩余 ${this.climateRemainingMinutes} 分钟`
       : `净化=开启 剩余 ${this.airRemainingMinutes} 分钟`;
-    Log.info(`空调/净化运行中：安排状态检查，${delay}ms 后（${running}）`);
+    Log.info(TAG, `空调/净化运行中：安排状态检查，${delay}ms 后（${running}）`);
   }
 
   /**
@@ -1060,7 +1064,7 @@ struct Index {
     } catch (err) {
       const e = err as BusinessError;
       this.climateFailCount++;
-      Log.warn(`空调/净化状态检查失败（第 ${this.climateFailCount} 次）: code=${e.code} ${e.message}`);
+      Log.warn(TAG, `空调/净化状态检查失败（第 ${this.climateFailCount} 次）: code=${e.code} ${e.message}`);
     } finally {
       this.climatePolling = false;
       // 状态可能已变为关闭，据此重排下一次检查
@@ -1216,7 +1220,7 @@ struct Index {
       ]);
     } catch (err) {
       const e = err as BusinessError;
-      Log.warn(`申请位置权限失败: code=${e.code} ${e.message}`);
+      Log.warn(TAG, `申请位置权限失败: code=${e.code} ${e.message}`);
     }
   }
 
@@ -1227,6 +1231,12 @@ struct Index {
    * 但**状态刷新**按需触发：距上次刷新不足阈值就不打扰用户。
    */
   onPageShow(): void {
+    // 概览 / 控制 / 详情是同一个页面里的 Swiper Tab —— 不是独立的 page，
+    // 不涉及页面切换，但要处理「切回概览 Tab」。
+    // 栈里每个页面切回前台时都会触发 onPageShow，Index 在栈底会先触发，
+    // 所以这里只在「切后台时也停在 Index」时才消费标记 —— 否则轮到子页时
+    // 标记已被吃掉，子页就不会执行 back 了。
+    this.resetToOverviewTabIfNeeded();
     if (this.repository === undefined) {
       return;
     }
@@ -1243,6 +1253,27 @@ struct Index {
     // 隐藏期间即使已经过了也会立刻查一次确认。
     this.syncClimateTimer();
     this.resume();
+  }
+
+  /**
+   * 后台停留超时后切回概览 Tab。
+   *
+   * 概览 / 控制 / 详情是同一个页面里的 Swiper Tab —— 不涉及页面切换，
+   * 切 Tab 是页面内部的事。
+   *
+   * 只在「切后台时也停在本页」时才处理 —— 停在子页时切后台的话，
+   * 标记要留给子页去 back 回概览页，这里不能抢。
+   */
+  private resetToOverviewTabIfNeeded(): void {
+    if (!BackgroundReset.needReset('Index')) {
+      return;
+    }
+    if (this.currentTab !== 0) {
+      Log.info(TAG, `后台超时，Tab 从 ${this.currentTab} 切回概览`);
+      this.currentTab = 0;
+      this.swiperController.changeIndex(0);
+    }
+    BackgroundReset.consume();
   }
 
   /**
@@ -1266,7 +1297,7 @@ struct Index {
         this.getUIContext().getRouter().replaceUrl({ url: 'pages/Login' });
         return;
       }
-      Log.warn(`恢复前台时读取会话失败: ${e.message}`);
+      Log.warn(TAG, `恢复前台时读取会话失败: ${e.message}`);
       return;
     }
 
@@ -1276,7 +1307,7 @@ struct Index {
     }
 
     if (!this.shouldRefreshOnResume()) {
-      Log.info(`距上次刷新不足 ${Index.RESUME_REFRESH_INTERVAL_MS}ms，跳过自动刷新`);
+      Log.info(TAG, `距上次刷新不足 ${Index.RESUME_REFRESH_INTERVAL_MS}ms，跳过自动刷新`);
       return;
     }
 
@@ -1317,7 +1348,7 @@ struct Index {
         return;
       }
       this.errorMessage = e.message.length > 0 ? e.message : '加载失败';
-      Log.error(`加载失败: ${e.message}`);
+      Log.error(TAG, `加载失败: ${e.message}`);
     } finally {
       this.loading = false;
       // 启动流程结束后同步一次文案，保证显示的是最新刷新时刻
@@ -1357,12 +1388,12 @@ struct Index {
       const e = err as BusinessError;
       if (e.code === 401) {
         // 会话失效：回登录页，而不是显示成「没有车辆」
-        Log.warn('会话已失效，跳转登录页');
+        Log.warn(TAG, '会话已失效，跳转登录页');
         this.getUIContext().getRouter().replaceUrl({ url: 'pages/Login' });
         return;
       }
       this.errorMessage = e.message.length > 0 ? e.message : '状态读取失败';
-      Log.error(`状态读取失败: ${e.message}`);
+      Log.error(TAG, `状态读取失败: ${e.message}`);
     } finally {
       this.loading = false;
       // 刷新彻底结束后再更新文案，避免过程中看到跳变。
@@ -1404,7 +1435,7 @@ struct Index {
       // 流式首帧到达后会由 markStreamPrimed 停掉它。
       this.startLocationTimer();
       repository.onStreamBroken = (fullMethod: string, message: string): void => {
-        Log.error(`状态流整体不可用，退回定时轮询: ${message}`);
+        Log.error(TAG, `状态流整体不可用，退回定时轮询: ${message}`);
         this.streamActive = false;
         // 推送链路已断，各域的首帧标记要一并清掉，
         // 否则轮询会因为「已就绪」而不启动。
@@ -1421,7 +1452,7 @@ struct Index {
       };
     } catch (err) {
       const e = err as BusinessError;
-      Log.warn(`订阅状态流失败，继续用轮询兜底: ${e.message}`);
+      Log.warn(TAG, `订阅状态流失败，继续用轮询兜底: ${e.message}`);
       this.streamActive = false;
       // 订阅整体失败，定位只能靠轮询
       this.startLocationTimer();
@@ -1886,7 +1917,7 @@ struct Index {
       // 净化已停 —— 心跳没有存在意义了
       this.clearAirLiveHeartbeat();
       LiveViewManager.stop(context as common.UIAbilityContext).catch((err: Error) => {
-        Log.warn(`销毁空气净化实况窗失败: ${err.message}`);
+        Log.warn(TAG, `销毁空气净化实况窗失败: ${err.message}`);
       });
       return;
     }
@@ -1898,7 +1929,7 @@ struct Index {
         }
       })
       .catch((err: Error) => {
-        Log.warn(`更新空气净化实况窗失败: ${err.message}`);
+        Log.warn(TAG, `更新空气净化实况窗失败: ${err.message}`);
       });
   }
 
@@ -1975,7 +2006,7 @@ struct Index {
         this.tickCountdowns();
       } catch (err) {
         // 读失败不算异常 —— 心跳的重点是刷新实况窗，读状态只是顺带。
-        Log.warn(`实况窗心跳读取净化状态失败: ${(err as Error).message}`);
+        Log.warn(TAG, `实况窗心跳读取净化状态失败: ${(err as Error).message}`);
       }
     }
     // 净化已停 → syncAirLiveView 会销毁实况窗，并停掉心跳
@@ -1999,7 +2030,7 @@ struct Index {
       this.charging, this.chargerConnection, this.powerWatts, this.currentAmps,
       this.remainingMinutes, this.locked, this.climate);
     CardPublisher.publish(context, snapshot).catch((err: Error) => {
-      Log.warn(`同步卡片失败: ${err.message}`);
+      Log.warn(TAG, `同步卡片失败: ${err.message}`);
     });
   }
 
@@ -2018,7 +2049,7 @@ struct Index {
     this.lastRefreshAt = now;
     // 存储写入不阻塞刷新
     SessionStore.setLastRefreshAt(context, now).catch((err: Error) => {
-      Log.warn(`记录刷新时刻失败: ${err.message}`);
+      Log.warn(TAG, `记录刷新时刻失败: ${err.message}`);
     });
   }
 
@@ -2040,7 +2071,7 @@ struct Index {
         this.lastRefreshText = Index.formatElapsed(stored, Date.now());
       }
     } catch (err) {
-      Log.warn(`读取刷新时刻失败: ${(err as Error).message}`);
+      Log.warn(TAG, `读取刷新时刻失败: ${(err as Error).message}`);
     }
   }
 
@@ -3009,7 +3040,7 @@ struct Index {
     // 推不出停机时刻时用很短的引导延迟 —— 先读一次车端状态拿到结束时刻，
     // 之后就能算出精确的窗口开启时刻。
     this.scheduleCampWatchTick(delay);
-    Log.info(`露营守候窗口已安排，${Math.round(delay / 1000)} 秒后开始`);
+    Log.info(TAG, `露营守候窗口已安排，${Math.round(delay / 1000)} 秒后开始`);
   }
 
   /**
@@ -3067,7 +3098,7 @@ struct Index {
       return;
     }
     this.scheduleCampWatchTick(wait);
-    Log.info(`露营守候窗口按新的结束时刻重排，${Math.round(wait / 1000)} 秒后开始`);
+    Log.info(TAG, `露营守候窗口按新的结束时刻重排，${Math.round(wait / 1000)} 秒后开始`);
   }
 
   /**
@@ -3077,7 +3108,7 @@ struct Index {
     if (this.campWatchTimer !== -1) {
       clearTimeout(this.campWatchTimer);
       this.campWatchTimer = -1;
-      Log.info('露营守候窗口已停止');
+      Log.info(TAG, '露营守候窗口已停止');
     }
     if (this.campRestartTimer !== -1) {
       clearTimeout(this.campRestartTimer);
@@ -3131,7 +3162,7 @@ struct Index {
         this.scheduleCampWatchTick(Index.CAMP_WATCH_INTERVAL_MS);
       }
     } catch (err) {
-      Log.warn(`露营守候检查失败: ${(err as Error).message}`);
+      Log.warn(TAG, `露营守候检查失败: ${(err as Error).message}`);
       // 读失败也继续守 —— 下一次再试。
       this.scheduleCampWatchTick(Index.CAMP_WATCH_INTERVAL_MS);
     }
@@ -3164,17 +3195,17 @@ struct Index {
     if (this.climateErrors.length > 0 &&
       !this.climateErrors.includes(Index.CLIMATE_ERROR_MAX_RUNTIME)) {
       const detail = Index.climateErrorText(this.climateErrors);
-      Log.warn(`露营模式：空调停机原因不是到时停机（${detail}），放弃续开`);
+      Log.warn(TAG, `露营模式：空调停机原因不是到时停机（${detail}），放弃续开`);
       this.abortCamp(detail.length > 0 ? `驻车空调已停止（${detail}），露营模式已结束` :
         '驻车空调已停止，露营模式已结束');
       return;
     }
     if (this.campRestartCount >= Index.CAMP_CLIMATE_MAX_RESTARTS) {
-      Log.warn('露营模式续开次数已达上限，放弃续开');
+      Log.warn(TAG, '露营模式续开次数已达上限，放弃续开');
       this.abortCamp('驻车空调无法重新启动，露营模式已结束');
       return;
     }
-    Log.info(`露营模式：安排续开驻车空调（${reason}）`);
+    Log.info(TAG, `露营模式：安排续开驻车空调（${reason}）`);
     this.campRestartTimer = setTimeout(() => {
       this.campRestartTimer = -1;
       this.restartCampClimate();
@@ -3249,7 +3280,7 @@ struct Index {
           this.abortCamp('驻车空调无法重新启动，露营模式已结束');
           return;
         }
-        Log.warn(`露营模式续开失败（第 ${this.campRestartFailCount} 次），稍后重试`);
+        Log.warn(TAG, `露营模式续开失败（第 ${this.campRestartFailCount} 次），稍后重试`);
         // 退避后重试，不再等 30 秒那一档
         this.campRestartTimer = setTimeout(() => {
           this.campRestartTimer = -1;
@@ -3261,14 +3292,14 @@ struct Index {
       this.campRestartFailCount = 0;
       this.climatePhase = TogglePhase.ON;
       this.climateClosing = false;
-      Log.info(`露营模式：驻车空调已续开（第 ${this.campRestartCount} 次）`);
+      Log.info(TAG, `露营模式：驻车空调已续开（第 ${this.campRestartCount} 次）`);
       // 续开成功 → 车端又给了新的 30 分钟。
       // 等一会儿让车端把新的剩余时长报上来，再排下一个守候窗口 ——
       // 立刻排会读到续开前的旧剩余时长，把窗口排到错误的位置。
       this.startCampWatch(Index.CAMP_CLIMATE_SETTLE_MS);
     } catch (err) {
       this.campRestartFailCount++;
-      Log.warn(`露营模式续开异常: ${(err as Error).message}`);
+      Log.warn(TAG, `露营模式续开异常: ${(err as Error).message}`);
     } finally {
       this.campRestarting = false;
     }
@@ -3552,7 +3583,7 @@ struct Index {
         this.draftChargeStopMinutes = state.chargeTimerStopMinutes;
       }
     } catch (err) {
-      Log.warn(`读取充电配置失败: ${(err as Error).message}`);
+      Log.warn(TAG, `读取充电配置失败: ${(err as Error).message}`);
     }
   }
 
@@ -3832,7 +3863,7 @@ struct Index {
             this.startCampWatch();
           }
           this.toast(message.length > 0 ? message : `${this.toggleLabel(kind)}指令下发失败`);
-          Log.warn(`车控执行失败：${message}`);
+          Log.warn(TAG, `车控执行失败：${message}`);
           return;
         }
         // 指令已下发，状态待确认：由 confirmToggle 等车端状态确认后落定
@@ -3849,7 +3880,7 @@ struct Index {
       this.pendingConfirmKind = undefined;
       this.clearClosing(kind);
       this.setPhase(kind, prev);
-      Log.error(`车控执行异常: ${e.message}`);
+      Log.error(TAG, `车控执行异常: ${e.message}`);
     }
   }
 
@@ -4078,7 +4109,7 @@ struct Index {
       }
       // 流断了就没法再等到推送确认，退回轮询路径继续等
       if (!this.streamReadyFor(kind)) {
-        Log.warn('状态流已断开，指令确认改走轮询');
+        Log.warn(TAG, '状态流已断开，指令确认改走轮询');
         this.pendingConfirmKind = undefined;
         // 只把剩余预算交给轮询，否则总等待时间会翻倍
         const remaining = budgetMs - (Date.now() - startedAt);
@@ -4088,7 +4119,7 @@ struct Index {
       await this.delay(200);
     }
     // 超时未确认：按目标状态落定（指令已成功下发，只是车端还没推进到终态）
-    Log.warn(`车控状态未在 ${budgetMs}ms 内被推送确认，按下发结果落定`);
+    Log.warn(TAG, `车控状态未在 ${budgetMs}ms 内被推送确认，按下发结果落定`);
     this.pendingConfirmKind = undefined;
     this.settleToggle(kind, target);
     if (!silent) {
@@ -4125,7 +4156,7 @@ struct Index {
         }
         return;
       } catch (err) {
-        Log.warn(`确认车控状态失败: ${(err as Error).message}`);
+        Log.warn(TAG, `确认车控状态失败: ${(err as Error).message}`);
       }
     }
     this.settleToggle(kind, target);
@@ -4159,7 +4190,7 @@ struct Index {
         ? this.trunkBusyTargetUnlocked
         : (tailgateLock === '已锁' ? !this.trunkBusyTargetUnlocked : false);
       if (reached) {
-        Log.info('尾门锁状态已确认，停掉车模指示器');
+        Log.info(TAG, '尾门锁状态已确认，停掉车模指示器');
         this.trunkBusy = false;
       }
     }
@@ -4170,7 +4201,7 @@ struct Index {
         tailgate === '已打开' ? TogglePhase.ON :
           (tailgate === '已关闭' ? TogglePhase.OFF : undefined);
       if (actual !== undefined && actual === this.pendingConfirmTarget) {
-        Log.info(`尾门状态已确认：${tailgate}，停掉执行动效`);
+        Log.info(TAG, `尾门状态已确认：${tailgate}，停掉执行动效`);
         this.trunkPhase = actual;
         this.pendingConfirmKind = undefined;
       }
@@ -4182,7 +4213,7 @@ struct Index {
         tailgateLock === '未锁' ? TogglePhase.ON :
           (tailgateLock === '已锁' ? TogglePhase.OFF : undefined);
       if (actual !== undefined && actual === this.pendingConfirmTarget) {
-        Log.info(`尾门锁状态已确认：${tailgateLock}，停掉执行动效`);
+        Log.info(TAG, `尾门锁状态已确认：${tailgateLock}，停掉执行动效`);
         this.trunkLockPhase = actual;
         this.pendingConfirmKind = undefined;
       }
@@ -4212,7 +4243,7 @@ struct Index {
       this.pendingConfirmTarget !== TogglePhase.OFF) {
       return;
     }
-    Log.info('整车锁已锁，尾门锁一并落定');
+    Log.info(TAG, '整车锁已锁，尾门锁一并落定');
     this.trunkLockPhase = TogglePhase.OFF;
     this.pendingConfirmKind = undefined;
   }
@@ -4239,7 +4270,7 @@ struct Index {
         // 净化开启 → 建实况窗；净化关闭 → 拆实况窗。
         if (target === TogglePhase.ON) {
           this.startAirLiveView().catch((err: Error) => {
-            Log.warn(`创建空气净化实况窗失败: ${err.message}`);
+            Log.warn(TAG, `创建空气净化实况窗失败: ${err.message}`);
           });
         } else {
           this.syncAirLiveView();
@@ -4275,7 +4306,7 @@ struct Index {
       this.windowStates = state.windowStates;
       this.doorStates = state.doorStates;
     } catch (err) {
-      Log.warn(`同步车窗状态失败: ${(err as Error).message}`);
+      Log.warn(TAG, `同步车窗状态失败: ${(err as Error).message}`);
     }
   }
 
@@ -4323,7 +4354,7 @@ struct Index {
       // 尾门状态变了，桌面卡片上的锁车文案也要跟着更新
       this.publishCard();
     } catch (err) {
-      Log.warn(`同步尾门锁状态失败: ${(err as Error).message}`);
+      Log.warn(TAG, `同步尾门锁状态失败: ${(err as Error).message}`);
     }
   }
 
@@ -4547,7 +4578,7 @@ struct Index {
         if (!success) {
           this.trunkBusy = false;
           this.trunkUnlocked = wasUnlocked;
-          Log.warn(`尾门控制失败：${message}`);
+          Log.warn(TAG, `尾门控制失败：${message}`);
           return;
         }
         this.trunkUnlocked = !wasUnlocked;
@@ -4559,7 +4590,7 @@ struct Index {
       const e = err as BusinessError;
       this.trunkBusy = false;
       this.trunkUnlocked = wasUnlocked;
-      Log.error(`尾门控制异常: ${e.message}`);
+      Log.error(TAG, `尾门控制异常: ${e.message}`);
     }
   }
 

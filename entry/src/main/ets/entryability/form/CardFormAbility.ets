@@ -4,6 +4,9 @@ import { CardBinding, CardData } from '../../core/vehicle/CardData';
 import { WidgetStore } from '../../core/vehicle/WidgetStore';
 import { Log } from '../../common/Log';
 
+/** 本文件的日志 Tag —— 过滤日志时按它筛。 */
+const TAG: string = 'CardFormAbility';
+
 /**
  * 桌面卡片提供方。
  *
@@ -44,7 +47,7 @@ export default class CardFormAbility extends FormExtensionAbility {
    * 卡片被删除。
    */
   onRemoveForm(formId: string): void {
-    Log.info(`卡片被移除: ${formId}`);
+    Log.info(TAG, `卡片被移除: ${formId}`);
   }
 
   /**
@@ -53,7 +56,7 @@ export default class CardFormAbility extends FormExtensionAbility {
    * 本卡片的控制走 router 事件跳主应用，不在这里处理事件。
    */
   onFormEvent(formId: string, message: string): void {
-    Log.info(`卡片事件: ${formId} ${message}`);
+    Log.info(TAG, `卡片事件: ${formId} ${message}`);
   }
 
   /**
@@ -79,9 +82,9 @@ export default class CardFormAbility extends FormExtensionAbility {
       const binding = formBindingData.createFormBindingData(data);
       return formProvider.updateForm(formId, binding);
     }).then(() => {
-      Log.info(`卡片 ${formId} 已刷新`);
+      Log.info(TAG, `卡片 ${formId} 已刷新`);
     }).catch((err: Error) => {
-      Log.warn(`刷新卡片 ${formId} 失败: ${err.message}`);
+      Log.warn(TAG, `刷新卡片 ${formId} 失败: ${err.message}`);
     });
   }
 
@@ -98,7 +101,7 @@ export default class CardFormAbility extends FormExtensionAbility {
       }
       return CardData.binding(CardData.display(snapshot));
     } catch (err) {
-      Log.warn(`读取卡片快照失败: ${(err as Error).message}`);
+      Log.warn(TAG, `读取卡片快照失败: ${(err as Error).message}`);
       return CardData.binding(CardData.empty());
     }
   }

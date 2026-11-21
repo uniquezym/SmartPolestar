@@ -2,6 +2,9 @@ import { preferences } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
 import { Log } from '../../common/Log';
 
+/** 本文件的日志 Tag —— 过滤日志时按它筛。 */
+const TAG: string = 'CampModeController';
+
 /**
  * 露营模式控制器 —— APP 侧编排的驻车空调定时守护。
  *
@@ -91,7 +94,7 @@ export class CampModeController {
       }
       return this.durationMinutes;
     } catch (err) {
-      Log.warn(`读取露营模式配置失败: ${(err as Error).message}`);
+      Log.warn(TAG, `读取露营模式配置失败: ${(err as Error).message}`);
       return this.durationMinutes;
     }
   }
@@ -128,7 +131,7 @@ export class CampModeController {
       await store.put(CampModeController.KEY_TEMPERATURE, this.temperatureCelsius);
       await store.flush();
     } catch (err) {
-      Log.warn(`保存露营模式温度失败: ${(err as Error).message}`);
+      Log.warn(TAG, `保存露营模式温度失败: ${(err as Error).message}`);
     }
   }
 
@@ -198,7 +201,7 @@ export class CampModeController {
       await store.put(CampModeController.KEY_DURATION, this.durationMinutes);
       await store.flush();
     } catch (err) {
-      Log.warn(`保存露营模式时长失败: ${(err as Error).message}`);
+      Log.warn(TAG, `保存露营模式时长失败: ${(err as Error).message}`);
     }
   }
 
@@ -215,7 +218,7 @@ export class CampModeController {
         await store.put(CampModeController.KEY_ENDS_AT, this.endsAt);
         await store.flush();
       } catch (err) {
-        Log.warn(`保存露营模式到期时刻失败: ${(err as Error).message}`);
+        Log.warn(TAG, `保存露营模式到期时刻失败: ${(err as Error).message}`);
       }
     }
     this.scheduleExpire();
@@ -234,7 +237,7 @@ export class CampModeController {
         await store.delete(CampModeController.KEY_ENDS_AT);
         await store.flush();
       } catch (err) {
-        Log.warn(`清除露营模式到期时刻失败: ${(err as Error).message}`);
+        Log.warn(TAG, `清除露营模式到期时刻失败: ${(err as Error).message}`);
       }
     }
   }

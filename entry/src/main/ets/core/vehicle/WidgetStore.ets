@@ -2,6 +2,9 @@ import { preferences } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
 import { Log } from '../../common/Log';
 
+/** 本文件的日志 Tag —— 过滤日志时按它筛。 */
+const TAG: string = 'WidgetStore';
+
 /**
  * 桌面卡片的状态快照存储。
  *
@@ -56,7 +59,7 @@ export class WidgetStore {
       await store.put(WidgetStore.KEY_SNAPSHOT, JSON.stringify(snapshot));
       await store.flush();
     } catch (err) {
-      Log.warn(`写入卡片快照失败: ${(err as Error).message}`);
+      Log.warn(TAG, `写入卡片快照失败: ${(err as Error).message}`);
     }
   }
 
@@ -82,7 +85,7 @@ export class WidgetStore {
       }
       return parsed;
     } catch (err) {
-      Log.warn(`同步读取卡片快照失败: ${(err as Error).message}`);
+      Log.warn(TAG, `同步读取卡片快照失败: ${(err as Error).message}`);
       return undefined;
     }
   }
@@ -105,7 +108,7 @@ export class WidgetStore {
       }
       return parsed;
     } catch (err) {
-      Log.warn(`读取卡片快照失败: ${(err as Error).message}`);
+      Log.warn(TAG, `读取卡片快照失败: ${(err as Error).message}`);
       return undefined;
     }
   }
@@ -119,7 +122,7 @@ export class WidgetStore {
       await store.delete(WidgetStore.KEY_SNAPSHOT);
       await store.flush();
     } catch (err) {
-      Log.warn(`清除卡片快照失败: ${(err as Error).message}`);
+      Log.warn(TAG, `清除卡片快照失败: ${(err as Error).message}`);
     }
   }
 }

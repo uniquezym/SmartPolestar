@@ -1,6 +1,9 @@
 import { http } from '@kit.NetworkKit';
 import { BusinessError, Log } from '../../../common/Log';
 
+/** 本文件的日志 Tag —— 过滤日志时按它筛。 */
+const TAG: string = 'GrpcHttpChannel';
+
 /**
  * gRPC unary 调用的 HTTP 传输层。
  *
@@ -89,17 +92,17 @@ export class GrpcHttpChannel {
       const url = `https://${this.host}/${fullMethod}`;
       const resp = await request.request(url, options);
       const status = resp.responseCode as number;
-      Log.info(`gRPC(HTTP) ${fullMethod} status=${status}`);
+      Log.info(TAG, `gRPC(HTTP) ${fullMethod} status=${status}`);
 
       if (status !== 200) {
         // 打印响应头，服务端拒绝时通常在 header 里给出原因
-        Log.error(`gRPC 响应头: ${JSON.stringify(resp.header)}`);
+        Log.error(TAG, `gRPC 响应头: ${JSON.stringify(resp.header)}`);
         const raw = resp.result;
         if (raw instanceof ArrayBuffer) {
           const body = new Uint8Array(raw);
-          Log.error(`gRPC 响应体 ${body.length} 字节: ${GrpcHttpChannel.hexPreview(body)}`);
+          Log.error(TAG, `gRPC 响应体 ${body.length} 字节: ${GrpcHttpChannel.hexPreview(body)}`);
         } else if (typeof raw === 'string') {
-          Log.error(`gRPC 响应体: ${raw}`);
+          Log.error(TAG, `gRPC 响应体: ${raw}`);
         }
         if (status === 401 || status === 403) {
           throw new BusinessError(status, `UNAUTHENTICATED: HTTP ${status}`);

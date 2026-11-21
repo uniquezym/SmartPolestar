@@ -3,6 +3,9 @@ import { ProtoWriter } from '../proto/ProtoWriter';
 import { ProtoReader, ProtoValue } from '../proto/ProtoReader';
 import { BusinessError, Log } from '../../common/Log';
 
+/** 本文件的日志 Tag —— 过滤日志时按它筛。 */
+const TAG: string = 'ChargeConfig';
+
 /**
  * 充电配置读写 —— 对应官方 App 的三个 chronos 服务。
  *
@@ -266,7 +269,7 @@ export class ChargeConfig {
 
     // 诊断日志：把顶层与 timer 内部的字段都打出来，
     // 一眼能区分「车端就是没配定时任务」与「结构对不上解析错了」。
-    Log.info(`预约充电原始: 顶层字段=[${ChargeConfig.fieldKeys(outer)}] ` +
+    Log.info(TAG, `预约充电原始: 顶层字段=[${ChargeConfig.fieldKeys(outer)}] ` +
       `timer字段=[${timer instanceof Uint8Array ? ChargeConfig.fieldKeys(new ProtoReader(timer).decode()) : '无'}] ` +
       `解析结果 start=${result.timerStart} stop=${result.timerStop} 启用=${result.timerActivated}`);
     return result;
@@ -298,7 +301,7 @@ export class ChargeConfig {
       const level = ProtoValue.asInteger(ProtoValue.get(fields, 1));
       return level === undefined ? -1 : level;
     } catch (err) {
-      Log.warn(`读取充电上限失败: ${(err as Error).message}`);
+      Log.warn(TAG, `读取充电上限失败: ${(err as Error).message}`);
       return -1;
     }
   }
@@ -318,7 +321,7 @@ export class ChargeConfig {
       const level = ProtoValue.asInteger(ProtoValue.get(fields, 1));
       return level === undefined ? -1 : level;
     } catch (err) {
-      Log.warn(`读取电流上限失败: ${(err as Error).message}`);
+      Log.warn(TAG, `读取电流上限失败: ${(err as Error).message}`);
       return -1;
     }
   }
@@ -335,7 +338,7 @@ export class ChargeConfig {
         'GetGlobalChargeTimerStream', vin, payload, GrpcClient.DEFAULT_TIMEOUT_MS, true);
       return ChargeConfig.parseChargeTimer(response);
     } catch (err) {
-      Log.warn(`读取预约充电设置失败: ${(err as Error).message}`);
+      Log.warn(TAG, `读取预约充电设置失败: ${(err as Error).message}`);
       return {
         targetSoc: -1,
         ampLimit: -1,
@@ -465,7 +468,7 @@ export class ChargeConfig {
         GrpcClient.DEFAULT_TIMEOUT_MS, true);
       if (response.length === 0) {
         // 服务端只回了 trailers（grpc-status 0）没有消息体 —— 视为成功。
-        Log.info(`充电配置已下发: ${label}`);
+        Log.info(TAG, `充电配置已下发: ${label}`);
         return { success: true, message: `${label}已保存` };
       }
       const fields = new ProtoReader(response).decode();
@@ -477,15 +480,15 @@ export class ChargeConfig {
       const message = ProtoValue.decodeString(ProtoValue.get(fields, 4)) ||
         ProtoValue.decodeString(ProtoValue.get(fields, 3));
       if (status === undefined || status === 3) {
-        Log.info(`充电配置已下发: ${label}`);
+        Log.info(TAG, `充电配置已下发: ${label}`);
         return { success: true, message: `${label}已保存` };
       }
       const detail = message.length > 0 ? message : `状态码 ${status}`;
-      Log.warn(`充电配置下发失败: ${label} ${detail}`);
+      Log.warn(TAG, `充电配置下发失败: ${label} ${detail}`);
       return { success: false, message: `${label}保存失败：${detail}` };
     } catch (err) {
       const e = err as BusinessError;
-      Log.error(`充电配置下发异常: ${label} ${e.message}`);
+      Log.error(TAG, `充电配置下发异常: ${label} ${e.message}`);
       return { success: false, message: `${label}保存失败：${e.message}` };
     }
   }

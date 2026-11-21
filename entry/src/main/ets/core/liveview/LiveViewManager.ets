@@ -3,6 +3,9 @@ import { wantAgent, common, WantAgent } from '@kit.AbilityKit';
 import { AirPurifyLiveData, LiveViewData } from './LiveViewData';
 import { BusinessError, Log } from '../../common/Log';
 
+/** 本文件的日志 Tag —— 过滤日志时按它筛。 */
+const TAG: string = 'LiveViewManager';
+
 /**
  * 空气净化实况窗管理器。
  *
@@ -42,12 +45,12 @@ export class LiveViewManager {
       const result = await liveViewManager.isLiveViewEnabled();
       LiveViewManager.enabled = result;
       if (!result) {
-        Log.warn('LiveView 能力未开通，实况窗功能不可用');
+        Log.warn(TAG, 'LiveView 能力未开通，实况窗功能不可用');
       }
     } catch (err) {
       const e = err as BusinessError;
       LiveViewManager.enabled = false;
-      Log.warn(`查询 LiveView 能力失败: code=${e.code} ${e.message}`);
+      Log.warn(TAG, `查询 LiveView 能力失败: code=${e.code} ${e.message}`);
     }
     return LiveViewManager.enabled;
   }
@@ -93,15 +96,15 @@ export class LiveViewManager {
     try {
       const view = await LiveViewManager.buildLiveView(context, data);
       await liveViewManager.startLiveView(view);
-      Log.info(`空气净化实况窗已创建: id=${LiveViewManager.LIVE_VIEW_ID}`);
+      Log.info(TAG, `空气净化实况窗已创建: id=${LiveViewManager.LIVE_VIEW_ID}`);
     } catch (err) {
       const e = err as BusinessError;
       if (e.code === 1003500005) {
         // 权益未开通 —— 华为侧没给本应用开实况窗权限，代码无法绕过
-        Log.warn('实况窗权益未开通：请在 AppGallery Connect 申请实况窗服务权益，或添加调测设备');
+        Log.warn(TAG, '实况窗权益未开通：请在 AppGallery Connect 申请实况窗服务权益，或添加调测设备');
         return;
       }
-      Log.warn(`创建空气净化实况窗失败: code=${e.code} ${e.message}`);
+      Log.warn(TAG, `创建空气净化实况窗失败: code=${e.code} ${e.message}`);
     }
   }
 
@@ -126,14 +129,14 @@ export class LiveViewManager {
       const e = err as BusinessError;
       if (e.code === 1003500009) {
         // 实况窗不存在 —— 上一次建窗可能失败或已被删除，需要重新创建
-        Log.info('空气净化实况窗不存在，将重新创建');
+        Log.info(TAG, '空气净化实况窗不存在，将重新创建');
         return false;
       }
       if (e.code === 1003500010) {
         // 已结束 —— 同样需要重建
         return false;
       }
-      Log.warn(`更新空气净化实况窗失败: code=${e.code} ${e.message}`);
+      Log.warn(TAG, `更新空气净化实况窗失败: code=${e.code} ${e.message}`);
       return true;
     }
   }
@@ -153,12 +156,12 @@ export class LiveViewManager {
       // 不推进 sequence —— 结束不是一次「更新」，沿用上次的顺序号即可。
       const view = await LiveViewManager.buildLiveView(context, LiveViewData.EMPTY_DATA, false);
       await liveViewManager.stopLiveView(view);
-      Log.info(`空气净化实况窗已销毁: id=${LiveViewManager.LIVE_VIEW_ID}`);
+      Log.info(TAG, `空气净化实况窗已销毁: id=${LiveViewManager.LIVE_VIEW_ID}`);
     } catch (err) {
       const e = err as BusinessError;
       // 1003500009 = 不存在，1003500010 = 已结束 —— 都说明它早没了
       if (e.code !== 1003500009 && e.code !== 1003500010) {
-        Log.warn(`销毁空气净化实况窗失败: code=${e.code} ${e.message}`);
+        Log.warn(TAG, `销毁空气净化实况窗失败: code=${e.code} ${e.message}`);
       }
     }
   }
@@ -178,7 +181,7 @@ export class LiveViewManager {
     }
     if (!stillRunning) {
       await LiveViewManager.stop(context);
-      Log.info('已清理残留的空气净化实况窗');
+      Log.info(TAG, '已清理残留的空气净化实况窗');
     }
   }
 

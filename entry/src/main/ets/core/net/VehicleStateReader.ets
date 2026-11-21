@@ -8,6 +8,9 @@ import {
 } from '../model/VehicleState';
 import { Log } from '../../common/Log';
 
+/** 本文件的日志 Tag —— 过滤日志时按它筛。 */
+const TAG: string = 'VehicleStateReader';
+
 /**
  * 灯组告警字段的描述。
  *
@@ -150,7 +153,7 @@ export class VehicleStateReader {
     state.windows = VehicleState.summarizeWindows(state.windowStates);
     // 打印逐扇原始值，便于核对协议枚举：
     // Exterior.OpenStatus 0=未指定 1=开启 2=关闭 3=未关严。
-    Log.info(`门窗原始值 门=${doorStates.join(',')} 窗=${windowStates.join(',')}`);
+    Log.info(TAG, `门窗原始值 门=${doorStates.join(',')} 窗=${windowStates.join(',')}`);
     state.exteriorStateAt = Date.now();
   }
 
@@ -287,7 +290,7 @@ export class VehicleStateReader {
     state.chargeTimerActivated = snapshot.timerActivated;
     state.chargeTimerStartMinutes = ChargeConfig.minutesOf(snapshot.timerStart);
     state.chargeTimerStopMinutes = ChargeConfig.minutesOf(snapshot.timerStop);
-    Log.info(`充电配置: 上限=${state.targetSoc}% 电流=${state.ampLimit}A ` +
+    Log.info(TAG, `充电配置: 上限=${state.targetSoc}% 电流=${state.ampLimit}A ` +
       `预约=${state.chargeTimerStartMinutes}/${state.chargeTimerStopMinutes} ` +
       `启用=${state.chargeTimerActivated}`);
   }
@@ -332,7 +335,7 @@ export class VehicleStateReader {
         raw.push(`${fieldNumber}=${value}`);
       }
     });
-    Log.info(`里程原始字段: ${raw.join(', ')}`);
+    Log.info(TAG, `里程原始字段: ${raw.join(', ')}`);
   }
 
   /**
@@ -442,7 +445,7 @@ export class VehicleStateReader {
         raw.push(`${fieldNumber}=${value}`);
       }
     });
-    Log.info(`健康原始字段: ${raw.join(', ')}`);
+    Log.info(TAG, `健康原始字段: ${raw.join(', ')}`);
 
     state.healthStateAt = Date.now();
   }
@@ -616,7 +619,7 @@ export class VehicleStateReader {
     const outer = new ProtoReader(response).decode();
     const locationBytes = ProtoValue.get(outer, 2);
     if (!(locationBytes instanceof Uint8Array)) {
-      Log.warn('最后停车位置响应缺少 field 2');
+      Log.warn(TAG, '最后停车位置响应缺少 field 2');
       return;
     }
     const location = new ProtoReader(locationBytes).decode();
@@ -629,7 +632,7 @@ export class VehicleStateReader {
     const latitude = ProtoValue.asFiniteNumber(ProtoValue.get(location, 2));
     if (latitude === undefined || longitude === undefined ||
       latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
-      Log.warn(`最后停车位置响应中没有有效坐标: lat=${latitude} lon=${longitude}`);
+      Log.warn(TAG, `最后停车位置响应中没有有效坐标: lat=${latitude} lon=${longitude}`);
       return;
     }
     state.parkedLatitude = latitude;
@@ -734,7 +737,7 @@ export class VehicleStateReader {
         await task.run();
       } catch (err) {
         // 单域失败不影响其余域，与 Android 端行为一致
-        Log.warn(`读取 ${task.name} 状态失败: ${(err as Error).message}`);
+        Log.warn(TAG, `读取 ${task.name} 状态失败: ${(err as Error).message}`);
       }
     }
   }

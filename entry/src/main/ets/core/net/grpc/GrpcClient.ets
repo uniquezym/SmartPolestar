@@ -4,6 +4,9 @@ import { AuthService } from '../../session/AuthService';
 import { common } from '@kit.AbilityKit';
 import { BusinessError, Log } from '../../../common/Log';
 
+/** 本文件的日志 Tag —— 过滤日志时按它筛。 */
+const TAG: string = 'GrpcClient';
+
 /**
  * gRPC 调用门面 —— 管理通道生命周期与鉴权重试。
  *
@@ -159,7 +162,7 @@ export class GrpcClient {
           throw new BusinessError(401, '登录状态已失效，请重新登录');
         }
         // token 被拒：强制续期后重试一次
-        Log.info(`C3 拒绝 access token（${e.message}），刷新后重试一次`);
+        Log.info(TAG, `C3 拒绝 access token（${e.message}），刷新后重试一次`);
         if (this.context !== undefined) {
           await AuthService.refreshIfNeeded(this.context, this.session, true);
         }
@@ -211,7 +214,7 @@ export class GrpcClient {
         try {
           cancel();
         } catch (err) {
-          Log.warn(`关闭 gRPC 流失败 ${fullMethod}: ${(err as Error).message}`);
+          Log.warn(TAG, `关闭 gRPC 流失败 ${fullMethod}: ${(err as Error).message}`);
         }
       };
 
@@ -338,10 +341,10 @@ export class GrpcClient {
           }
           if (error === null) {
             // 服务端正常关闭了流，也要重连 —— 车端状态还需要持续跟踪
-            Log.info(`gRPC 流 ${fullMethod} 被服务端关闭，准备重连`);
+            Log.info(TAG, `gRPC 流 ${fullMethod} 被服务端关闭，准备重连`);
             onDisconnect('服务端关闭了流');
           } else {
-            Log.warn(`gRPC 流 ${fullMethod} 断开: ${error}`);
+            Log.warn(TAG, `gRPC 流 ${fullMethod} 断开: ${error}`);
             onDisconnect(error);
           }
           this.scheduleReconnect(fullMethod, start, error, attempt, (delay: number) => {
@@ -380,13 +383,13 @@ export class GrpcClient {
   private scheduleReconnect(fullMethod: string, start: () => void, error: string | null,
     attempt: number, schedule: (delay: number) => void, onFatal: (message: string) => void): void {
     if (error !== null && GrpcClient.isUnauthenticatedMessage(error)) {
-      Log.warn(`gRPC 流 ${fullMethod} 鉴权失效，尝试续期 token`);
+      Log.warn(TAG, `gRPC 流 ${fullMethod} 鉴权失效，尝试续期 token`);
       this.refreshForStream(fullMethod, error, start, onFatal);
       return;
     }
 
     if (attempt >= GrpcClient.STREAM_MAX_ATTEMPTS) {
-      Log.error(`gRPC 流 ${fullMethod} 重连 ${attempt} 次仍失败，放弃`);
+      Log.error(TAG, `gRPC 流 ${fullMethod} 重连 ${attempt} 次仍失败，放弃`);
       const message = error ?? '服务端关闭了流';
       onFatal(message);
       this.onStreamFatal?.(fullMethod, message);
@@ -394,7 +397,7 @@ export class GrpcClient {
     }
 
     const delay = GrpcClient.STREAM_RETRY_BASE_MS * Math.pow(GrpcClient.STREAM_RETRY_MULTIPLIER, attempt);
-    Log.info(`gRPC 流 ${fullMethod} ${delay}ms 后重连（第 ${attempt + 1} 次）`);
+    Log.info(TAG, `gRPC 流 ${fullMethod} ${delay}ms 后重连（第 ${attempt + 1} 次）`);
     schedule(delay);
   }
 
@@ -416,10 +419,10 @@ export class GrpcClient {
     }
 
     this.refreshTokenOnce().then(() => {
-      Log.info(`gRPC 流 ${fullMethod} token 已续期，立即重连`);
+      Log.info(TAG, `gRPC 流 ${fullMethod} token 已续期，立即重连`);
       start();
     }).catch((err: BusinessError) => {
-      Log.error(`gRPC 流 ${fullMethod} token 续期失败: ${err.message}`);
+      Log.error(TAG, `gRPC 流 ${fullMethod} token 续期失败: ${err.message}`);
       onFatal(err.message);
       this.onStreamFatal?.(fullMethod, err.message);
     });

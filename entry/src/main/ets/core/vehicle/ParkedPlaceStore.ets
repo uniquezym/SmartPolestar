@@ -3,6 +3,9 @@ import { common } from '@kit.AbilityKit';
 import { Log } from '../../common/Log';
 import { ParkedPlaceInfo, ParkedPlacePlain } from './ParkedPlaceInfo';
 
+/** 本文件的日志 Tag —— 过滤日志时按它筛。 */
+const TAG: string = 'ParkedPlaceStore';
+
 /**
  * 停车地点的持久化。
  *
@@ -66,7 +69,7 @@ export class ParkedPlaceStore {
       const parsed = JSON.parse(raw) as ParkedPlacePlain;
       return ParkedPlaceInfo.fromPlain(parsed);
     } catch (err) {
-      Log.warn(`读取缓存的停车地点失败: ${(err as Error).message}`);
+      Log.warn(TAG, `读取缓存的停车地点失败: ${(err as Error).message}`);
       return undefined;
     }
   }
@@ -83,7 +86,7 @@ export class ParkedPlaceStore {
       await store.put(ParkedPlaceStore.KEY_INFO, JSON.stringify(info.toPlain()));
       await store.flush();
     } catch (err) {
-      Log.warn(`缓存停车地点失败: ${(err as Error).message}`);
+      Log.warn(TAG, `缓存停车地点失败: ${(err as Error).message}`);
     }
   }
 }

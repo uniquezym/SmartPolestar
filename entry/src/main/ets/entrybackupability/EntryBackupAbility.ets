@@ -1,16 +1,18 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BackupExtensionAbility, BundleVersion } from '@kit.CoreFileKit';
+import { Log } from '../common/Log';
 
-const DOMAIN = 0x0000;
+/** 本文件的日志 Tag —— 过滤日志时按它筛。 */
+const TAG: string = 'EntryBackupAbility';
 
 export default class EntryBackupAbility extends BackupExtensionAbility {
   async onBackup() {
-    hilog.info(DOMAIN, 'testTag', 'onBackup ok');
+    hilog.info(Log.DOMAIN, TAG, 'onBackup ok');
     await Promise.resolve();
   }
 
   async onRestore(bundleVersion: BundleVersion) {
-    hilog.info(DOMAIN, 'testTag', 'onRestore ok %{public}s', JSON.stringify(bundleVersion));
+    hilog.info(Log.DOMAIN, TAG, 'onRestore ok %{public}s', JSON.stringify(bundleVersion));
     await Promise.resolve();
   }
 }

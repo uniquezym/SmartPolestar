@@ -2,6 +2,9 @@ import { common } from '@kit.AbilityKit';
 import { mapCommon, petalMaps } from '@kit.MapKit';
 import { BusinessError, Log } from '../../common/Log';
 
+/** 本文件的日志 Tag —— 过滤日志时按它筛。 */
+const TAG: string = 'PetalMapLauncher';
+
 /**
  * 花瓣地图（华为地图）跳转。
  *
@@ -38,7 +41,7 @@ export class PetalMapLauncher {
     } catch (err) {
       const e = err as BusinessError;
       // 1002600014 —— 设备没装花瓣地图；801 —— 设备能力不支持。
-      Log.warn(`打开花瓣地图失败: code=${e.code} ${e.message}`);
+      Log.warn(TAG, `打开花瓣地图失败: code=${e.code} ${e.message}`);
       return false;
     }
   }
@@ -60,7 +63,7 @@ export class PetalMapLauncher {
       return true;
     } catch (err) {
       const e = err as BusinessError;
-      Log.warn(`打开花瓣地图地点详情失败: code=${e.code} ${e.message}`);
+      Log.warn(TAG, `打开花瓣地图地点详情失败: code=${e.code} ${e.message}`);
       return false;
     }
   }

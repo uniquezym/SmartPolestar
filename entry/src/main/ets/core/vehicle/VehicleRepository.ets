@@ -10,6 +10,9 @@ import { VehicleState } from '../model/VehicleState';
 import { StateDomain, VehicleStateStream } from './VehicleStateStream';
 import { BusinessError, Log } from '../../common/Log';
 
+/** 本文件的日志 Tag —— 过滤日志时按它筛。 */
+const TAG: string = 'VehicleRepository';
+
 /**
  * 车辆数据仓储 —— 负责会话生命周期、服务发现与状态聚合。
  *
@@ -69,7 +72,7 @@ export class VehicleRepository {
 
     // 服务发现（仅在主机缺失时发起）
     await ServiceDiscovery.resolveHosts(session);
-    Log.info(`C3 主机: ${session.c3Host} / LBS 主机: ${session.c3LbsHost}`);
+    Log.info(TAG, `C3 主机: ${session.c3Host} / LBS 主机: ${session.c3LbsHost}`);
 
     if (this.client === undefined) {
       this.client = new GrpcClient(this.context, session);
@@ -100,7 +103,7 @@ export class VehicleRepository {
     } catch (err) {
       const e = err as BusinessError;
       if (e.code === 401) {
-        Log.info('车辆列表被拒（401），强制续期后重试一次');
+        Log.info(TAG, '车辆列表被拒（401），强制续期后重试一次');
         await AuthService.refreshIfNeeded(this.context, session, true);
         this.vins = await VehicleRepository.listVehicles(session);
       } else {
@@ -109,7 +112,7 @@ export class VehicleRepository {
     }
 
     if (this.vins.length === 0) {
-      Log.warn('车辆列表为空：账号下确实没有车辆');
+      Log.warn(TAG, '车辆列表为空：账号下确实没有车辆');
     }
     return this.vins;
   }
@@ -302,10 +305,10 @@ export class VehicleRepository {
       onUpdate(domain, updated);
     };
     stream.onStreamError = (domain: StateDomain, message: string) => {
-      Log.warn(`状态流(${domain})断开，正在重连: ${message}`);
+      Log.warn(TAG, `状态流(${domain})断开，正在重连: ${message}`);
     };
     stream.onStreamFatal = (domain: StateDomain, message: string) => {
-      Log.error(`状态流(${domain})彻底不可用: ${message}`);
+      Log.error(TAG, `状态流(${domain})彻底不可用: ${message}`);
       // 全部断开才算流式通道整体失效 —— 单条流挂掉还能靠其余流维持。
       if (stream.isAllBroken()) {
         this.onStreamBroken?.('', message);

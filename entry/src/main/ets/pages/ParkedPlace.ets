@@ -4,10 +4,14 @@ import { geoLocationManager } from '@kit.LocationKit';
 import { MapComponent, map, mapCommon } from '@kit.MapKit';
 import { AppIcon, AppIconName } from '../components/Icons';
 import { Log } from '../common/Log';
+import { BackgroundReset } from '../core/app/BackgroundReset';
 import { CoordinateTransform } from '../core/vehicle/CoordinateTransform';
 import { MapLauncher } from '../core/vehicle/MapLauncher';
 import { ParkedPlaceInfo } from '../core/vehicle/ParkedPlaceInfo';
 import { PetalMapLauncher } from '../core/vehicle/PetalMapLauncher';
+
+/** 本文件的日志 Tag —— 过滤日志时按它筛。 */
+const TAG: string = 'ParkedPlace';
 
 /**
  * 停车位置地点预览页。
@@ -83,6 +87,22 @@ struct ParkedPlace {
   }
 
   /**
+   * 页面每次显示时触发（切回前台也会）。
+   *
+   * 后台停留超过阈值时重置回概览页 —— 跳转必须放在这里做，
+   * Ability 的 onForeground 时 UI 还没恢复前台，router 指令会被丢弃。
+   *
+   * 本页是最后一个停车位置页之外唯一需要处理页面切换的地方 ——
+   * 概览 / 控制 / 详情是同一个页面里的 Tab，不是独立 page。
+   */
+  onPageShow(): void {
+    if (!BackgroundReset.needReset('ParkedPlace')) {
+      return;
+    }
+    BackgroundReset.backToIndex(this.getUIContext());
+  }
+
+  /**
    * 申请定位权限。
    *
    * 概览页进入时已经申请过一次，这里再申请一次是为了直接从别处进本页的情况。
@@ -97,7 +117,7 @@ struct ParkedPlace {
         'ohos.permission.LOCATION'
       ]);
     } catch (err) {
-      Log.warn(`申请位置权限失败: ${(err as Error).message}`);
+      Log.warn(TAG, `申请位置权限失败: ${(err as Error).message}`);
     }
   }
 
@@ -124,7 +144,7 @@ struct ParkedPlace {
       }
     } catch (err) {
       const e = err as BusinessError;
-      Log.warn(`获取当前位置失败: code=${e.code} ${e.message}`);
+      Log.warn(TAG, `获取当前位置失败: code=${e.code} ${e.message}`);
     }
   }
 
@@ -175,22 +195,22 @@ struct ParkedPlace {
     controller: map.MapComponentController | null | undefined): void {
     try {
       if (err !== undefined && err !== null && err.code !== 0) {
-        Log.warn(`地图初始化失败: code=${err.code} ${err.message}`);
+        Log.warn(TAG, `地图初始化失败: code=${err.code} ${err.message}`);
         return;
       }
       if (controller === undefined || controller === null) {
-        Log.warn('地图初始化回调没有拿到控制器');
+        Log.warn(TAG, '地图初始化回调没有拿到控制器');
         return;
       }
       this.mapController = controller;
       // 地图底图还没加载完时打的标记可能不渲染 —— 底图就绪后再补一次。
       controller.on('mapLoad', () => {
-        Log.info('地图底图加载完成');
+        Log.info(TAG, '地图底图加载完成');
         this.setupMarkers(controller);
       });
       this.setupMarkers(controller);
     } catch (e) {
-      Log.error(`地图初始化回调异常: ${(e as Error).message}`);
+      Log.error(TAG, `地图初始化回调异常: ${(e as Error).message}`);
     }
   }
 
@@ -216,10 +236,10 @@ struct ParkedPlace {
           anchorV: 1.0
         });
         this.parkedMarked = true;
-        Log.info(`停车位标记已添加: ${this.latitude}, ${this.longitude}`);
+        Log.info(TAG, `停车位标记已添加: ${this.latitude}, ${this.longitude}`);
       } catch (err) {
         const e = err as BusinessError;
-        Log.warn(`添加停车位标记失败: code=${e.code} ${e.message}`);
+        Log.warn(TAG, `添加停车位标记失败: code=${e.code} ${e.message}`);
       }
     }
 
@@ -231,10 +251,10 @@ struct ParkedPlace {
           title: '当前位置'
         });
         this.currentMarked = true;
-        Log.info(`当前位置标记已添加: ${this.currentLatitude}, ${this.currentLongitude}`);
+        Log.info(TAG, `当前位置标记已添加: ${this.currentLatitude}, ${this.currentLongitude}`);
       } catch (err) {
         const e = err as BusinessError;
-        Log.warn(`添加当前位置标记失败: code=${e.code} ${e.message}`);
+        Log.warn(TAG, `添加当前位置标记失败: code=${e.code} ${e.message}`);
       }
     }
 
@@ -345,7 +365,7 @@ struct ParkedPlace {
         }
         .width(32)
         .height(32)
-        .borderRadius(4)
+        .borderRadius(16)
         .border({ width: 1, color: $r('app.color.app_rule') })
         .onClick(() => {
           this.getUIContext().getRouter().back();

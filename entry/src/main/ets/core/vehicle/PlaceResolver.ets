@@ -5,6 +5,9 @@ import { CoordinateTransform } from './CoordinateTransform';
 import { MapKitPlaceResolver } from './MapKitPlaceResolver';
 import { ParkedPlaceInfo } from './ParkedPlaceInfo';
 
+/** 本文件的日志 Tag —— 过滤日志时按它筛。 */
+const TAG: string = 'PlaceResolver';
+
 /**
  * 经纬度反查地点信息。
  *
@@ -65,7 +68,7 @@ export class PlaceResolver {
     Promise<ParkedPlaceInfo | undefined> {
     try {
       if (!geoLocationManager.isGeocoderAvailable()) {
-        Log.warn('系统地理编码服务不可用');
+        Log.warn(TAG, '系统地理编码服务不可用');
         return undefined;
       }
       // GCJ02 → WGS84：不转换的话查询点会偏出去几百米，
@@ -80,7 +83,7 @@ export class PlaceResolver {
       };
       const addresses = await geoLocationManager.getAddressesFromLocation(request);
       if (addresses.length === 0) {
-        Log.warn('反查地点名没有返回结果');
+        Log.warn(TAG, '反查地点名没有返回结果');
         return undefined;
       }
 
@@ -90,7 +93,7 @@ export class PlaceResolver {
         name = PlaceResolver.fallback(addresses[0]);
       }
 
-      Log.info(`系统反查地点名结果: ${name} | ${PlaceResolver.dump(addresses[0])}`);
+      Log.info(TAG, `系统反查地点名结果: ${name} | ${PlaceResolver.dump(addresses[0])}`);
       if (name.length === 0) {
         return undefined;
       }
@@ -109,7 +112,7 @@ export class PlaceResolver {
       return info;
     } catch (err) {
       const e = err as BusinessError;
-      Log.warn(`系统反查地点名失败: code=${e.code} ${e.message}`);
+      Log.warn(TAG, `系统反查地点名失败: code=${e.code} ${e.message}`);
       return undefined;
     }
   }

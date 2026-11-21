@@ -7,6 +7,9 @@ import { CardPublisher } from '../core/vehicle/CardPublisher';
 import { CardIntent } from '../core/vehicle/CardIntent';
 import { BusinessError, Log } from '../common/Log';
 
+/** 本文件的日志 Tag —— 过滤日志时按它筛。 */
+const TAG: string = 'CardControl';
+
 /**
  * 卡片触发的车控确认页。
  *
@@ -156,7 +159,7 @@ struct CardControl {
       }
       return undefined;
     } catch (err) {
-      Log.warn(`读取车辆状态失败: ${(err as Error).message}`);
+      Log.warn(TAG, `读取车辆状态失败: ${(err as Error).message}`);
       return undefined;
     }
   }
@@ -330,7 +333,7 @@ struct CardControl {
         state.locked, state.climate);
       await CardPublisher.publish(context, snapshot);
     } catch (err) {
-      Log.warn(`车控后刷新卡片失败: ${(err as Error).message}`);
+      Log.warn(TAG, `车控后刷新卡片失败: ${(err as Error).message}`);
     }
   }
 
@@ -348,13 +351,13 @@ struct CardControl {
         return;
       }
     } catch (err) {
-      Log.warn(`读取路由栈失败: ${(err as Error).message}`);
+      Log.warn(TAG, `读取路由栈失败: ${(err as Error).message}`);
     }
     if (context !== undefined) {
       try {
         context.terminateSelf();
       } catch (err) {
-        Log.warn(`结束应用失败: ${(err as Error).message}`);
+        Log.warn(TAG, `结束应用失败: ${(err as Error).message}`);
       }
     }
   }

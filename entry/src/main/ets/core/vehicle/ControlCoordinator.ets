@@ -1,9 +1,12 @@
-﻿import { common } from '@kit.AbilityKit';
+import { common } from '@kit.AbilityKit';
 import { GrpcClient } from '../net/grpc/GrpcClient';
 import { VehicleCommands } from '../net/VehicleCommands';
 import { SessionState } from '../model/SessionState';
 import { AuthService } from '../session/AuthService';
 import { BusinessError, Log } from '../../common/Log';
+
+/** 本文件的日志 Tag —— 过滤日志时按它筛。 */
+const TAG: string = 'ControlCoordinator';
 
 /**
  * 车控协调器 —— 串起「鉴权续期 -> 下发指令 -> 结果反馈」。
@@ -51,11 +54,11 @@ export class ControlCoordinator {
     try {
       await VehicleCommands.execute(this.client, vin, action,
         GrpcClient.DEFAULT_TIMEOUT_MS, targetTemperatureCelsius);
-      Log.info(`车控指令已执行: ${label} VIN…${vin.substring(vin.length - 6)}`);
+      Log.info(TAG, `车控指令已执行: ${label} VIN…${vin.substring(vin.length - 6)}`);
       onResult(true, `${label}指令已发送`);
     } catch (err) {
       const e = err as BusinessError;
-      Log.error(`车控指令失败: ${label} ${e.message}`);
+      Log.error(TAG, `车控指令失败: ${label} ${e.message}`);
       onResult(false, e.message.length > 0 ? e.message : `${label}失败`);
     }
   }
