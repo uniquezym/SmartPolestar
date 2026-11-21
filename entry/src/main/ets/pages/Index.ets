@@ -2400,6 +2400,23 @@ struct Index {
   }
 
   /**
+   * 车模充电口内部呼吸填充色 —— 与圆盘底色配对的高亮色。
+   *
+   * 底色是深色（常态），呼吸时叠加高亮色模拟充电指示灯的亮灭。
+   * 高亮色按充电阶段配对，故障时不会冒出充电中的蓝色。
+   */
+  private chargeMarkerFillColor(): ResourceColor {
+    const stage = this.chargeStage();
+    if (stage === ChargeStage.COMPLETED) {
+      return $r('app.color.app_charge_fill_ok');
+    }
+    if (stage === ChargeStage.FAULT) {
+      return $r('app.color.app_charge_fill_error');
+    }
+    return $r('app.color.app_charge_fill_accent');
+  }
+
+  /**
    * 充电功率文案。≥1000W 显示 kW，否则显示 W。
    *
    * 还原自原版 MainActivity.m325d0。
@@ -5023,6 +5040,7 @@ struct Index {
                 portOpen: this.portOpen,
                 charging: this.chargingMarked(),
                 chargeColor: this.chargeMarkerColor(),
+                chargeFillColor: this.chargeMarkerFillColor(),
                 chargePulsing: this.chargeMarkerPulsing(),
                 trunkUnlocked: this.trunkUnlocked,
                 trunkBusy: this.trunkBusy,

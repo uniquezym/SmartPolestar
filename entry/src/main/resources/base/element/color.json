@@ -131,6 +131,18 @@
     {
       "name": "app_state_unlocked",
       "value": "#9A5609"
+    },
+    {
+      "name": "app_charge_fill_accent",
+      "value": "#3D8FC7"
+    },
+    {
+      "name": "app_charge_fill_ok",
+      "value": "#43B37E"
+    },
+    {
+      "name": "app_charge_fill_error",
+      "value": "#D0655A"
     }
   ]
 }

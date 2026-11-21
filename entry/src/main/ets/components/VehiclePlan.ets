@@ -1,4 +1,8 @@
 import { AppIcon, AppIconName } from './Icons';
+import { Log } from '../common/Log';
+
+/** 本文件的日志 Tag —— 过滤日志时按它筛。 */
+const TAG: string = 'VehiclePlan';
 
 /**
  * 车模标记点的位置与文案。
@@ -66,6 +70,14 @@ export struct VehiclePlan {
    * 挂在它上面的 Watch 不会触发，呼吸动画也就永远启动不了。
    */
   @Prop @Watch('onChargePulsingChanged') chargePulsing: boolean = false;
+  /**
+   * 充电口圆盘内部的呼吸填充色 —— 指示灯亮灭时显示的颜色。
+   *
+   * 与 `chargeColor` 是配对关系：圆盘底色是深色（常态），
+   * 呼吸时叠加一层高亮色并淡入淡出，模拟真实车辆的充电指示灯。
+   * 高亮色按充电阶段配对，各阶段不共用同一个色。
+   */
+  @Prop chargeFillColor: ResourceColor = $r('app.color.app_charge_fill_accent');
   /** 尾门解锁 —— 尾门标记点显示警示色。 */
   @Prop trunkUnlocked: boolean = false;
   /** 尾门指令执行中 —— 标记点显示蓝色描边与旋转指示器。 */
@@ -132,6 +144,7 @@ export struct VehiclePlan {
     this.chargePulse = 0;
     this.pulseTimer = setInterval(() => {
       this.chargePulse = this.chargePulse === 0 ? 1 : 0;
+      Log.info(TAG, `呼吸相位切换: chargePulse=${this.chargePulse} 填充opacity=${this.fillOpacity()}`);
     }, 1100);
   }
 
@@ -204,11 +217,16 @@ export struct VehiclePlan {
   }
 
   /**
-   * 充电口标记点：充电枪已连接时用深蓝实心圆盘 + 白色插头 + 单圈呼吸光环。
+   * 充电口标记点：充电枪已连接时用深蓝实心圆盘 + 白色插头 + 呼吸光环 + 呼吸填充。
    *
    * 深蓝实心对纸白底是高对比，一眼可见；实心蓝底白图标也与右侧快捷按钮
    * 「开启 = 蓝底白图标」是同一套视觉语言。
-   * 呼吸光环只有一圈，直径与透明度同步缓慢变化，不产生视觉噪音。
+   *
+   * 两层呼吸：
+   *   外圈光环 —— 直径 30→40、透明度 0.15→0.55，向外扩散；
+   *   内部填充 —— 高亮色从无到有再到无，像真实车辆的充电指示灯在亮灭。
+   * 两层共用同一个相位定时器（chargePulse），扩散时内部正好亮起，
+   * 看上去是能量从充电口涌出来。
    */
   @Builder
   chargingPortMarker() {
@@ -225,11 +243,23 @@ export struct VehiclePlan {
       }
 
       // 主体：实心圆盘，颜色随充电阶段变化
-      Stack()
-        .width(26)
-        .height(26)
-        .borderRadius(13)
-        .backgroundColor(this.chargeColor)
+      Stack() {
+        // 内部呼吸填充：高亮色淡入淡出，模拟充电指示灯的亮灭。
+        // 只在充电中渲染；不充电时圆盘就是纯底色，安静不跳动。
+        if (this.chargePulsing) {
+          Stack()
+            .width('100%')
+            .height('100%')
+            .borderRadius(13)
+            .backgroundColor(this.chargeFillColor)
+            .opacity(this.fillOpacity())
+            .animation({ duration: 1100, curve: Curve.EaseInOut })
+        }
+      }
+      .width(26)
+      .height(26)
+      .borderRadius(13)
+      .backgroundColor(this.chargeColor)
 
       // 白色插头图标
       AppIcon({
@@ -247,6 +277,16 @@ export struct VehiclePlan {
       x: 52 - 20,
       y: 238 - 20
     })
+  }
+
+  /**
+   * 内部填充层的透明度。
+   *
+   * 相位 0 完全透明（指示灯灭），相位 1 亮起（指示灯亮）。
+   * 峰值取 0.85 —— 高亮色叠在深蓝底上，0.85 时跳出来的幅度最明显。
+   */
+  private fillOpacity(): number {
+    return this.chargePulse === 0 ? 0 : 0.85;
   }
 
   /**
