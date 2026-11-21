@@ -3638,14 +3638,15 @@ struct Index {
 
     this.chargeSaving = true;
     const failures: string[] = [];
-    let saved = 0;
+    /** 成功保存的配置项名称，用于提示「只提示设置的内容」。 */
+    const savedLabels: string[] = [];
 
     try {
       // 充电上限：只有跟车端已生效的值不同才下发。
       if (this.draftChargeSoc >= 0 && this.draftChargeSoc !== this.chargeTargetSoc) {
         const result = await ChargeConfig.setTargetSoc(client, vin, this.draftChargeSoc);
         if (result.success) {
-          saved++;
+          savedLabels.push('充电上限');
           this.chargeTargetSoc = this.draftChargeSoc;
         } else {
           failures.push(result.message);
@@ -3656,7 +3657,7 @@ struct Index {
       if (this.draftChargeAmp >= 0 && this.draftChargeAmp !== this.chargeAmpLimit) {
         const result = await ChargeConfig.setAmpLimit(client, vin, this.draftChargeAmp);
         if (result.success) {
-          saved++;
+          savedLabels.push('电流上限');
           this.chargeAmpLimit = this.draftChargeAmp;
         } else {
           failures.push(result.message);
@@ -3674,7 +3675,7 @@ struct Index {
           ChargeConfig.formatMinutes(this.draftChargeStartMinutes),
           ChargeConfig.formatMinutes(this.draftChargeStopMinutes));
         if (result.success) {
-          saved++;
+          savedLabels.push('预约充电');
           this.chargeTimerActivated = this.draftChargeTimerOn;
           this.chargeTimerStartMinutes = this.draftChargeStartMinutes;
           this.chargeTimerStopMinutes = this.draftChargeStopMinutes;
@@ -3689,16 +3690,19 @@ struct Index {
       this.chargeSaving = false;
     }
 
+    // 提示只说改了哪几项 —— 逐项列出，用户一眼看到自己动过的配置生效了。
+    const savedText = savedLabels.length > 0 ? savedLabels.join('、') : '';
     if (failures.length === 0) {
-      this.toast(saved > 0 ? '充电配置已保存' : '没有需要保存的修改');
+      this.toast(savedText.length > 0 ? `${savedText}已保存` : '没有需要保存的修改');
       // 指令发出不等于车端已生效 —— 重新读一次，以车端实际状态为准。
       // 不同步编辑态：车端可能还没生效，同步会把用户刚填的值冲掉。
-      if (saved > 0) {
+      if (savedLabels.length > 0) {
         await this.loadChargeConfig(vin, false);
       }
       return;
     }
-    this.toast(failures.join('；'));
+    // 部分成功：先说成功保存了哪几项，再说哪项失败。
+    this.toast(savedText.length > 0 ? `${savedText}已保存；${failures.join('；')}` : failures.join('；'));
   }
 
   /**
