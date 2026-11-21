@@ -3622,6 +3622,9 @@ struct Index {
   /**
    * 保存充电配置。
    *
+   * **只下发有改动的项** —— 没改的项不重复写车端，避免无谓的网络往返，
+   * 也避免把车端可能已变化的值覆盖回去。
+   *
    * 三项配置顺序下发，每项独立报错 —— 一项失败不影响其他项，
    * 最后汇总提示。
    */
@@ -3638,7 +3641,8 @@ struct Index {
     let saved = 0;
 
     try {
-      if (this.draftChargeSoc >= 0) {
+      // 充电上限：只有跟车端已生效的值不同才下发。
+      if (this.draftChargeSoc >= 0 && this.draftChargeSoc !== this.chargeTargetSoc) {
         const result = await ChargeConfig.setTargetSoc(client, vin, this.draftChargeSoc);
         if (result.success) {
           saved++;
@@ -3648,7 +3652,8 @@ struct Index {
         }
       }
 
-      if (this.draftChargeAmp >= 0) {
+      // 电流上限：同上。
+      if (this.draftChargeAmp >= 0 && this.draftChargeAmp !== this.chargeAmpLimit) {
         const result = await ChargeConfig.setAmpLimit(client, vin, this.draftChargeAmp);
         if (result.success) {
           saved++;
@@ -3658,8 +3663,13 @@ struct Index {
         }
       }
 
-      // 预约时段：没设过时刻就跳过（车端不接受空时段）。
-      if (this.draftChargeStartMinutes >= 0 && this.draftChargeStopMinutes >= 0) {
+      // 预约充电：开关与起止时刻是**一次调用带三个字段**，
+      // 所以这三项里任一有改动就得整体下发一次，没改动则完全不碰。
+      // 没设过时刻就跳过（车端不接受空时段）。
+      const timerChanged = this.draftChargeTimerOn !== this.chargeTimerActivated ||
+        this.draftChargeStartMinutes !== this.chargeTimerStartMinutes ||
+        this.draftChargeStopMinutes !== this.chargeTimerStopMinutes;
+      if (timerChanged && this.draftChargeStartMinutes >= 0 && this.draftChargeStopMinutes >= 0) {
         const result = await ChargeConfig.setChargeTimer(client, vin, this.draftChargeTimerOn,
           ChargeConfig.formatMinutes(this.draftChargeStartMinutes),
           ChargeConfig.formatMinutes(this.draftChargeStopMinutes));
