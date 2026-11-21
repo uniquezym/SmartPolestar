@@ -10,6 +10,8 @@ import { AppIcon, AppIconName } from '../components/Icons';
 import { StateToggle, ToggleKind, TogglePhase } from '../components/StateToggle';
 import { VehiclePlan } from '../components/VehiclePlan';
 import { StateRow } from '../components/StateRow';
+import { QuickEntryGrid, SheetKind } from '../components/QuickEntryGrid';
+import { SheetHost } from '../components/SheetHost';
 import { Control } from './Control';
 import { Detail } from './Detail';
 import { PlaceResolver } from '../core/vehicle/PlaceResolver';
@@ -401,6 +403,13 @@ struct Index {
   @State findCarFlashAction: string = '';
   /** 寻车高亮的清除定时器句柄。 */
   private findCarFlashTimer: number = -1;
+  /**
+   * 当前打开的半模态面板种类，NONE 表示没有面板打开。
+   *
+   * 面板内容是控制页 / 详情页已有的卡片组件，状态全部由本文件持有，
+   * 所以在面板里操作，主界面上的快捷开关会同步变化。
+   */
+  @State sheetKind: SheetKind = SheetKind.NONE;
   /** 逐项健康告警文案，为空表示没有异常。 */
   @State healthWarnings: string[] = [];
   /** 车辆整体健康总评：良好 / 需关注 / 未知。 */
@@ -4688,6 +4697,22 @@ struct Index {
   }
 
   /**
+   * 打开半模态面板。
+   */
+  private openSheet(kind: SheetKind): void {
+    Log.info(TAG, `打开半模态面板: ${kind}`);
+    this.sheetKind = kind;
+  }
+
+  /**
+   * 关闭半模态面板。
+   */
+  private closeSheet(): void {
+    Log.info(TAG, '关闭半模态面板');
+    this.sheetKind = SheetKind.NONE;
+  }
+
+  /**
    * 延时。
    */
   private delay(ms: number): Promise<void> {
@@ -5174,6 +5199,16 @@ struct Index {
             .border({ width: { top: 1, bottom: 1 }, color: $r('app.color.app_rule') })
             .margin({ top: 10 })
 
+            // ---------- 功能入口宫格 ----------
+            // 点开是半模态面板，面板里放控制页 / 详情页已有的卡片。
+            // 面板内容与主界面的快捷开关共用同一份状态，操作后主界面同步变化。
+            QuickEntryGrid({
+              onOpen: (kind: SheetKind) => {
+                this.openSheet(kind);
+              }
+            })
+            .margin({ top: 18 })
+
             // ---------- 最后停车位置 ----------
             StateRow({
               icon: AppIconName.LOCATION,
@@ -5322,5 +5357,130 @@ struct Index {
     .width('100%')
     .height('100%')
     .backgroundColor($r('app.color.app_background'))
+    // ---------- 半模态面板 ----------
+    // 挂在根节点上：弹起时主界面变暗但不销毁，关闭后回到原位置。
+    .bindSheet(this.sheetKind !== SheetKind.NONE, this.sheetBuilder(), {
+      height: SheetSize.LARGE,
+      dragBar: true,
+      showClose: true,
+      maskColor: $r('app.color.app_scrim'),
+      backgroundColor: $r('app.color.app_background'),
+      title: this.sheetTitle(),
+      onDisappear: () => {
+        this.closeSheet();
+      }
+    })
+  }
+
+  /**
+   * 半模态面板标题。
+   */
+  private sheetTitle(): SheetTitleOptions {
+    switch (this.sheetKind) {
+      case SheetKind.HEALTH:
+        return { title: '车辆健康' };
+      case SheetKind.CHARGE:
+        return { title: '充电设置' };
+      case SheetKind.CAMP:
+        return { title: '露营模式' };
+      case SheetKind.AIR:
+        return { title: '空气净化' };
+      case SheetKind.VEHICLE:
+        return { title: '车辆控制' };
+      case SheetKind.FIND_CAR:
+        return { title: '寻车' };
+      default:
+        return { title: '' };
+    }
+  }
+
+  /**
+   * 半模态面板内容。
+   */
+  @Builder
+  private sheetBuilder() {
+    SheetHost({
+      kind: this.sheetKind,
+      healthStatus: this.healthStatus,
+      maintenanceStatus: this.maintenanceStatus,
+      maintenanceCode: this.maintenanceCode,
+      serviceRemainingDays: this.serviceRemainingDays,
+      serviceRemainingKm: this.serviceRemainingKm,
+      brakeFluidWarning: this.brakeFluidWarning,
+      coolantWarning: this.coolantWarning,
+      washerFluidWarning: this.washerFluidWarning,
+      lowVoltageBatteryWarning: this.lowVoltageBatteryWarning,
+      tyreWarnings: this.tyreWarnings,
+      lightFaultCount: this.lightFaultCount,
+      lightFaultNames: this.lightFaultNames,
+      battery: this.batteryLevel,
+      chargeTargetSoc: this.draftChargeSoc,
+      chargeAmpLimit: this.draftChargeAmp,
+      chargeTimerActivated: this.draftChargeTimerOn,
+      chargeTimerStartMinutes: this.draftChargeStartMinutes,
+      chargeTimerStopMinutes: this.draftChargeStopMinutes,
+      chargeSaving: this.chargeSaving,
+      savedChargeTargetSoc: this.chargeTargetSoc,
+      savedChargeAmpLimit: this.chargeAmpLimit,
+      savedChargeTimerActivated: this.chargeTimerActivated,
+      savedChargeTimerStartMinutes: this.chargeTimerStartMinutes,
+      savedChargeTimerStopMinutes: this.chargeTimerStopMinutes,
+      campPhase: this.campPhase,
+      campDurationMinutes: this.campDurationMinutes,
+      campRemainingMinutes: this.campRemainingMinutes,
+      campRemainingRatio: this.campRemainingRatio,
+      campCelsius: this.campCelsius,
+      airPhase: this.airPhase,
+      airAqi: this.airQualityIndex,
+      airPm25: this.pm25UgM3,
+      airDisabled: this.climateActive(),
+      lockPhase: this.lockPhase,
+      trunkLockPhase: this.trunkLockPhase,
+      trunkPhase: this.trunkPhase,
+      windowPhase: this.windowPhase,
+      findCarFlashAction: this.findCarFlashAction,
+      onChargeTargetSocChange: (percent: number) => {
+        this.changeChargeTargetSoc(percent);
+      },
+      onAmpLimitChange: (amps: number) => {
+        this.changeChargeAmpLimit(amps);
+      },
+      onChargeTimerToggle: (activated: boolean) => {
+        this.changeChargeTimerToggle(activated);
+      },
+      onChargeTimerChange: (startMinutes: number, stopMinutes: number) => {
+        this.changeChargeTimer(startMinutes, stopMinutes);
+      },
+      onChargeSave: () => {
+        this.saveChargeConfig();
+      },
+      onCampToggle: () => {
+        this.toggleCamp();
+      },
+      onCampDurationChange: (minutes: number) => {
+        this.changeCampDuration(minutes);
+      },
+      onCampTemperatureChange: (celsius: number) => {
+        this.changeCampTemperature(celsius);
+      },
+      onAirToggle: () => {
+        this.toggle(ToggleKind.PURIFIER);
+      },
+      onLockToggle: () => {
+        this.toggle(ToggleKind.LOCK);
+      },
+      onTrunkLockToggle: () => {
+        this.toggle(ToggleKind.TRUNK_LOCK);
+      },
+      onTrunkToggle: () => {
+        this.toggle(ToggleKind.TRUNK);
+      },
+      onWindowToggle: () => {
+        this.toggle(ToggleKind.WINDOW);
+      },
+      onFindCarAction: (action: string) => {
+        this.honkFlash(action);
+      }
+    })
   }
 }

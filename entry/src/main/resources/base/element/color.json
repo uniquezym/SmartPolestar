@@ -131,6 +131,10 @@
     {
       "name": "app_state_unlocked",
       "value": "#9A5609"
+    },
+    {
+      "name": "app_scrim",
+      "value": "#66000000"
     }
   ]
 }
