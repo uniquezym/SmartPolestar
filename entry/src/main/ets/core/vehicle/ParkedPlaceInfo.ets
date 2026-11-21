@@ -28,6 +28,14 @@ export class ParkedPlaceInfo {
   roadName: string = '';
   /** 距停车点的距离（米），-1 表示未知。 */
   distance: number = -1;
+  /** 省级行政区，例如「上海市」「江苏省」。 */
+  province: string = '';
+  /** 市级行政区，例如「苏州市」。 */
+  city: string = '';
+  /** 区县级行政区，例如「青浦区」。 */
+  district: string = '';
+  /** 乡镇级行政区，例如「金泽镇」。 */
+  town: string = '';
 
   /**
    * 是否拿到了任何可用信息。
@@ -35,6 +43,57 @@ export class ParkedPlaceInfo {
   isEmpty(): boolean {
     return this.aoiName.length === 0 && this.poiName.length === 0 &&
       this.address.length === 0 && this.roadName.length === 0;
+  }
+
+  /**
+   * 行政区划前缀 —— 省 + 市 + 区 + 镇 连写。
+   *
+   * 直辖市的省、市同名（「上海市」「上海市」），这里按相邻重复去重，
+   * 结果就是「上海市青浦区金泽镇」。
+   */
+  adminPath(): string {
+    const parts: string[] = [];
+    const push = (value: string): void => {
+      if (value.length === 0) {
+        return;
+      }
+      const last = parts.length > 0 ? parts[parts.length - 1] : '';
+      if (last === value) {
+        return;
+      }
+      parts.push(value);
+    };
+    push(this.province);
+    push(this.city);
+    push(this.district);
+    push(this.town);
+    return parts.join('');
+  }
+
+  /**
+   * 完整展示名 —— 行政区划前缀 + AOI 名。
+   *
+   * AOI 缺失时退到地址 / 道路名；地址本身已含行政区时不再重复拼接前缀。
+   */
+  fullName(): string {
+    const prefix = this.adminPath();
+    let name = this.aoiName;
+    if (name.length === 0) {
+      name = this.address;
+    }
+    if (name.length === 0) {
+      name = this.roadName;
+    }
+    if (prefix.length === 0) {
+      return name;
+    }
+    if (name.length === 0) {
+      return prefix;
+    }
+    if (name.indexOf(prefix) >= 0) {
+      return name;
+    }
+    return prefix + name;
   }
 
   /**
@@ -67,7 +126,11 @@ export class ParkedPlaceInfo {
       poiType: this.poiType,
       address: this.address,
       roadName: this.roadName,
-      distance: this.distance
+      distance: this.distance,
+      province: this.province,
+      city: this.city,
+      district: this.district,
+      town: this.town
     };
   }
 
@@ -83,6 +146,11 @@ export class ParkedPlaceInfo {
     info.address = plain.address;
     info.roadName = plain.roadName;
     info.distance = plain.distance;
+    // 行政区划字段是后加的，旧缓存里没有 —— 缺省按空串处理。
+    info.province = plain.province ?? '';
+    info.city = plain.city ?? '';
+    info.district = plain.district ?? '';
+    info.town = plain.town ?? '';
     return info;
   }
 
@@ -133,4 +201,9 @@ export interface ParkedPlacePlain {
   address: string;
   roadName: string;
   distance: number;
+  /** 行政区划字段是后加的，旧缓存没有 —— 保持可选。 */
+  province?: string;
+  city?: string;
+  district?: string;
+  town?: string;
 }

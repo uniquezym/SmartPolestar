@@ -13,7 +13,6 @@ import { StateRow } from '../components/StateRow';
 import { Control } from './Control';
 import { Detail } from './Detail';
 import { PlaceResolver } from '../core/vehicle/PlaceResolver';
-import { MapLauncher } from '../core/vehicle/MapLauncher';
 import { ParkedPlaceInfo } from '../core/vehicle/ParkedPlaceInfo';
 import { ParkedPlaceStore } from '../core/vehicle/ParkedPlaceStore';
 import { CardPublisher } from '../core/vehicle/CardPublisher';
@@ -2841,7 +2840,7 @@ struct Index {
   }
 
   /**
-   * 「最后停车位置」的副信息 —— 只显示 AOI 名。
+   * 「最后停车位置」的副信息 —— 完整地址（省 / 市 / 区 / 镇 + AOI）。
    *
    * 反查进行中时留空 —— 先闪一下经纬度再跳成地址名，
    * 用户会以为位置变了。只有解析彻底失败才回退显示原始坐标。
@@ -2854,35 +2853,28 @@ struct Index {
     if (place === undefined) {
       return this.parkedCoordinate;
     }
-    const name = place.displayName();
+    const name = place.fullName();
     return name.length > 0 ? name : this.parkedCoordinate;
   }
 
   /**
-   * 点击「最后停车位置」：拉起系统地图定位到停车点。
+   * 点击「最后停车位置」：进入地点预览页。
+   *
+   * 预览页里是原生地图 —— 当前位置、停车位置、以及到停车位的路线。
    */
-  private async openParkedMap(): Promise<void> {
-    if (this.context === undefined) {
-      return;
-    }
+  private openParkedMap(): void {
     if (this.parkedLatitude < 0 || this.parkedLongitude < 0) {
       this.toast('暂无停车位置信息');
       return;
     }
-    const placeName = this.parkedPlace !== undefined ? this.parkedPlace.displayName() : '';
-    const opened = await MapLauncher.open(
-      this.context, this.parkedLatitude, this.parkedLongitude, placeName);
-    if (!opened) {
-      // 系统没有可响应 geo: 的地图应用，退到内置在线地图
-      this.getUIContext().getRouter().pushUrl({
-        url: 'pages/Map',
-        params: {
-          latitude: this.parkedLatitude,
-          longitude: this.parkedLongitude,
-          name: placeName
-        }
-      });
-    }
+    this.getUIContext().getRouter().pushUrl({
+      url: 'pages/ParkedPlace',
+      params: {
+        latitude: this.parkedLatitude,
+        longitude: this.parkedLongitude,
+        timestamp: this.parkedTimestamp
+      }
+    });
   }
 
   /**

@@ -17,8 +17,14 @@ export class ParkedPlaceStore {
   /** 坐标键。 */
   private static readonly KEY_LATITUDE: string = 'latitude';
   private static readonly KEY_LONGITUDE: string = 'longitude';
-  /** 解析结果键（JSON 串）。 */
-  private static readonly KEY_INFO: string = 'info';
+  /**
+   * 解析结果键（JSON 串）。
+   *
+   * v2：解析结果里新增了行政区划（省 / 市 / 区 / 镇）。
+   * 旧缓存没有这些字段，直接复用会导致地址前缀缺失，
+   * 所以换键让旧缓存自然失效、重新反查一次。
+   */
+  private static readonly KEY_INFO: string = 'info_v2';
 
   private static store: preferences.Preferences | undefined = undefined;
 

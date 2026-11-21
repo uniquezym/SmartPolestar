@@ -3,6 +3,7 @@
     "pages/Index",
     "pages/Login",
     "pages/Map",
+    "pages/ParkedPlace",
     "pages/CardControl"
   ]
 }

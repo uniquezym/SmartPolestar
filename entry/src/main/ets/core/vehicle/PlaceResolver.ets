@@ -100,6 +100,12 @@ export class PlaceResolver {
       if (addresses[0].roadName !== undefined) {
         info.roadName = addresses[0].roadName;
       }
+      // 系统逆地理编码也给行政区划：administrativeArea 是省，
+      // locality 是市，subAdministrativeArea 是区县，subLocality 是街道。
+      info.province = addresses[0].administrativeArea ?? '';
+      info.city = addresses[0].locality ?? '';
+      info.district = addresses[0].subAdministrativeArea ?? '';
+      info.town = addresses[0].subLocality ?? '';
       return info;
     } catch (err) {
       const e = err as BusinessError;

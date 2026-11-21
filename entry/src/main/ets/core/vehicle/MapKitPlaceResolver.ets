@@ -100,7 +100,44 @@ export class MapKitPlaceResolver {
       info.address = result.addressDescription;
     }
 
+    MapKitPlaceResolver.pickAdmin(info, result.addressComponent);
+
     return info;
+  }
+
+  /**
+   * 从 addressComponent 里取行政区划（省 / 市 / 区 / 镇）。
+   *
+   * Map Kit 的 adminLevel 层级对中国大陆是：
+   *   adminLevel1 = 省 / 自治区 / 直辖市
+   *   adminLevel2 = 市 / 地区
+   *   adminLevel3 = 区 / 县
+   *   adminLevel4 = 街道 / 镇
+   * 直辖市的省、市同名（「上海市」「上海市」），重复由 adminPath() 去重。
+   *
+   * 每一级都有兜底：不同区域版本给的字段并不完全一致，
+   * 缺哪一级就用 locality / city.cityName / subLocality1 顶上。
+   */
+  private static pickAdmin(info: ParkedPlaceInfo, component: site.AddressComponent): void {
+    info.province = component.adminLevel1 !== undefined ? component.adminLevel1 : '';
+
+    if (component.adminLevel2 !== undefined && component.adminLevel2.length > 0) {
+      info.city = component.adminLevel2;
+    } else if (component.city !== undefined && component.city.cityName !== undefined) {
+      info.city = component.city.cityName;
+    }
+
+    if (component.adminLevel3 !== undefined && component.adminLevel3.length > 0) {
+      info.district = component.adminLevel3;
+    } else if (component.locality !== undefined) {
+      info.district = component.locality;
+    }
+
+    if (component.adminLevel4 !== undefined && component.adminLevel4.length > 0) {
+      info.town = component.adminLevel4;
+    } else if (component.subLocality1 !== undefined) {
+      info.town = component.subLocality1;
+    }
   }
 
   /**
@@ -123,6 +160,21 @@ export class MapKitPlaceResolver {
       roadNames.push(road.name ?? '');
     }
     return `aoi=[${aoiNames.join('|')}] poi=[${poiNames.join('|')}] road=[${roadNames.join('|')}]` +
-      ` desc=${result.addressDescription}`;
+      ` desc=${result.addressDescription}` +
+      ` admin=${MapKitPlaceResolver.dumpAdmin(result.addressComponent)}`;
+  }
+
+  /**
+   * 打印行政区划原始字段。
+   *
+   * 真机上看这一行就能确认 adminLevel1~4 与省 / 市 / 区 / 镇的对应关系，
+   * 对不上时直接调 pickAdmin() 的兜底顺序。
+   */
+  private static dumpAdmin(component: site.AddressComponent): string {
+    return `L1=${component.adminLevel1 ?? ''}|L2=${component.adminLevel2 ?? ''}` +
+      `|L3=${component.adminLevel3 ?? ''}|L4=${component.adminLevel4 ?? ''}` +
+      `|L5=${component.adminLevel5 ?? ''}|city=${component.city?.cityName ?? ''}` +
+      `|locality=${component.locality ?? ''}|sub1=${component.subLocality1 ?? ''}` +
+      `|sub2=${component.subLocality2 ?? ''}`;
   }
 }
