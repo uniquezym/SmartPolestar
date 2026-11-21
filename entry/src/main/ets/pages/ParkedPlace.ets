@@ -351,8 +351,8 @@ struct ParkedPlace {
           this.getUIContext().getRouter().back();
         })
 
-        Text('车辆停放位置')
-          .fontSize(21)
+        Text('最后停车位置')
+          .fontSize(20)
           .fontWeight(FontWeight.Normal)
           .fontColor($r('app.color.app_primary_text'))
       }
