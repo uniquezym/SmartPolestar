@@ -36,10 +36,13 @@ export class ParkedPlaceStore {
   /**
    * 读取已缓存的解析结果。
    *
+   * 坐标比对走距离容差，不是逐位相等 —— 车辆上报的坐标带 GPS 抖动，
+   * 同一个车位每次都可能差几米。
+   *
    * @param context   上下文
    * @param latitude  当前纬度
    * @param longitude 当前经度
-   * @returns 坐标一致时返回缓存结果，否则返回 undefined
+   * @returns 位置没挪动时返回缓存结果，否则返回 undefined
    */
   static async load(context: common.Context, latitude: number, longitude: number):
     Promise<ParkedPlaceInfo | undefined> {
@@ -47,8 +50,7 @@ export class ParkedPlaceStore {
       const store = await ParkedPlaceStore.open(context);
       const lat = await store.get(ParkedPlaceStore.KEY_LATITUDE, -1) as number;
       const lon = await store.get(ParkedPlaceStore.KEY_LONGITUDE, -1) as number;
-      // 坐标有位数差也算变了 —— 车位变了就该重新反查。
-      if (Math.abs(lat - latitude) > 1e-6 || Math.abs(lon - longitude) > 1e-6) {
+      if (ParkedPlaceInfo.moved(lat, lon, latitude, longitude)) {
         return undefined;
       }
       const raw = await store.get(ParkedPlaceStore.KEY_INFO, '') as string;

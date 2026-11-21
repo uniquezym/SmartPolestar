@@ -311,6 +311,15 @@ struct Index {
   @State parkedPlace: ParkedPlaceInfo | undefined = undefined;
   /** 停车地点是否正在反查。解析中时不出经纬度，避免闪一下再跳成地址名。 */
   @State parkedResolving: boolean = false;
+  /**
+   * 上次逆编码时用的坐标 —— 判定「停车位置是否挪动」的基准。
+   *
+   * 不能用「上次收到的坐标」当基准：车辆上报的坐标带 GPS 抖动，
+   * 同一个车位每次都可能有零点几米的差异，一抖动就会被判成挪位。
+   * -1 表示还没反查过。
+   */
+  private parkedDecodedLatitude: number = -1;
+  private parkedDecodedLongitude: number = -1;
   /** 停车纬度。 */
   @State parkedLatitude: number = -1;
   /** 停车经度。 */
@@ -1723,12 +1732,9 @@ struct Index {
       this.parkedTimestamp = state.parkedTimestamp;
       this.parkedTime = this.formatParkedTime(state.parkedTimestamp);
     }
-    // 坐标变化时重新反查地点名。
-    // 停车位置通常不变，所以只在坐标真的变了才反查 —— 每次推送都反查
-    // 会白白消耗地理编码配额。
-    if (state.parkedLatitude !== undefined && state.parkedLongitude !== undefined &&
-      (state.parkedLatitude !== this.parkedLatitude ||
-        state.parkedLongitude !== this.parkedLongitude)) {
+    // 坐标有更新就交给 resolveParkedPlace 判断要不要重新反查 ——
+    // 它拿「上次逆编码时用的坐标」当基准，GPS 抖动不会被当成挪位。
+    if (state.parkedLatitude !== undefined && state.parkedLongitude !== undefined) {
       this.parkedLatitude = state.parkedLatitude;
       this.parkedLongitude = state.parkedLongitude;
       this.parkedCoordinate =
@@ -2785,9 +2791,12 @@ struct Index {
   /**
    * 反查停车坐标对应的地点名。
    *
-   * 先看缓存 —— 停车位置长时间不变，经纬度没变就直接复用上次的结果，
-   * 不必每次进应用都重新请求地理编码（既省配额，副信息也不会闪一下）。
-   * 缓存没有或对不上时才会真的发起反查。
+   * 判定「要不要重新查」的基准是「上次逆编码时用的坐标」，
+   * 不是「上次收到的坐标」—— 上报的坐标带 GPS 抖动，
+   * 拿收到的坐标当基准会一有抖动就重新查一遍。
+   *
+   * 顺带复用落盘的缓存：这次进应用的坐标与上次反查时一致，
+   * 就连请求都不发。
    *
    * 失败时保持 undefined，UI 回退显示原始坐标 —— 地点名是补充信息，
    * 不该因为它拖垮整个概览页。
@@ -2801,19 +2810,30 @@ struct Index {
       return;
     }
 
-    this.parkedResolving = true;
-    const cached = await ParkedPlaceStore.load(ctx, lat, lon);
-    if (cached !== undefined) {
-      this.parkedPlace = cached;
+    // 本次坐标与上次反查用的坐标基本一致 → 位置没挪，之前的结论继续有效。
+    if (!ParkedPlaceInfo.moved(this.parkedDecodedLatitude, this.parkedDecodedLongitude, lat, lon)) {
       this.parkedResolving = false;
       return;
     }
 
+    // 位置确实变了。先看落盘缓存里有没有这个位置的现成结果。
+    const cached = await ParkedPlaceStore.load(ctx, lat, lon);
+    if (cached !== undefined) {
+      this.parkedPlace = cached;
+      this.parkedResolving = false;
+      this.parkedDecodedLatitude = lat;
+      this.parkedDecodedLongitude = lon;
+      return;
+    }
+
+    this.parkedResolving = true;
     const info = await PlaceResolver.resolve(ctx, lat, lon);
     // 期间坐标可能已变，丢弃过期结果
     if (lat === this.parkedLatitude && lon === this.parkedLongitude) {
       this.parkedPlace = info;
       this.parkedResolving = false;
+      this.parkedDecodedLatitude = lat;
+      this.parkedDecodedLongitude = lon;
       if (info !== undefined) {
         ParkedPlaceStore.save(ctx, lat, lon, info);
       }

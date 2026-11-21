@@ -6,6 +6,14 @@
  * （小区、园区、写字楼），最贴合「最后停车位置」这句话的语义。
  */
 export class ParkedPlaceInfo {
+  /**
+   * 判定挪位的距离容差（米）。
+   *
+   * GPS 抖动在露天停车场能到十几米，地下车库更差。
+   * 30 米足够区分「换了个车位」与「同一车位的坐标漂移」。
+   */
+  static readonly MOVE_THRESHOLD_METERS: number = 30;
+
   /** AOI 名，例如「XX 小区」「XX 科技园」。 */
   aoiName: string = '';
   /** AOI 分类，例如「住宅区」「工业园区」。 */
@@ -76,6 +84,41 @@ export class ParkedPlaceInfo {
     info.roadName = plain.roadName;
     info.distance = plain.distance;
     return info;
+  }
+
+  /**
+   * 判定停车位置是否真的挪动了。
+   *
+   * 车辆上报的坐标带 GPS 抖动 —— 同一个车位每次上报都可能有零点几米的差异。
+   * 用「上次收到的坐标」当基准，一有抖动就会被判成挪位，白白重新反查一遍。
+   * 所以基准取「上次逆编码时用的坐标」，并留出距离容差。
+   *
+   * @param lat1 上次逆编码用的纬度
+   * @param lon1 上次逆编码用的经度
+   * @param lat2 当前纬度
+   * @param lon2 当前经度
+   * @returns 是否挪动了
+   */
+  static moved(lat1: number, lon1: number, lat2: number, lon2: number): boolean {
+    // 基准无效（还没反查过）→ 视为挪动，需要查一次。
+    if (lat1 < 0 || lon1 < 0) {
+      return true;
+    }
+    return ParkedPlaceInfo.distanceMeters(lat1, lon1, lat2, lon2) >
+      ParkedPlaceInfo.MOVE_THRESHOLD_METERS;
+  }
+
+  /**
+   * 两点间的大圆距离（米）。
+   */
+  static distanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+    const radius = 6371000;
+    const rad = Math.PI / 180;
+    const dLat = (lat2 - lat1) * rad;
+    const dLon = (lon2 - lon1) * rad;
+    const a = Math.pow(Math.sin(dLat / 2), 2) +
+      Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.pow(Math.sin(dLon / 2), 2);
+    return 2 * radius * Math.asin(Math.min(1, Math.sqrt(a)));
   }
 }
 
