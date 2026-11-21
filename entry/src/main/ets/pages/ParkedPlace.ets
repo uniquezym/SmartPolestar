@@ -180,19 +180,19 @@ struct ParkedPlace {
   /**
    * 地图初始化完成：打两个标记、框住两点。
    *
-   * 【坑】ArkUI 的 AsyncCallback 在成功时传的 err 是 **undefined**，
-   * 不是 `{code: 0}`。直接读 err.code 会抛 TypeError，
-   * 而回调里的异常会被静默吞掉 —— 表现就是「地图出来了但标记一个都没有，
-   * 也没有任何日志」。所以这里必须先判空。
+   * 【坑】ArkUI 的 AsyncCallback 在成功时传的 err 是 **null**
+   * （有时是 undefined），不是 `{code: 0}`。直接读 err.code 会抛
+   * TypeError，而回调里的异常会被静默吞掉 —— 表现就是「地图出来了
+   * 但标记一个都没有，也没有应用自己的日志」。所以这里必须先判空。
    */
-  private onMapReady(err: BusinessError | undefined,
-    controller: map.MapComponentController | undefined): void {
+  private onMapReady(err: BusinessError | null | undefined,
+    controller: map.MapComponentController | null | undefined): void {
     try {
-      if (err !== undefined && err.code !== 0) {
+      if (err !== undefined && err !== null && err.code !== 0) {
         Log.warn(`地图初始化失败: code=${err.code} ${err.message}`);
         return;
       }
-      if (controller === undefined) {
+      if (controller === undefined || controller === null) {
         Log.warn('地图初始化回调没有拿到控制器');
         return;
       }
@@ -377,7 +377,8 @@ struct ParkedPlace {
       // ---------- 地图 ----------
       MapComponent({
         mapOptions: this.mapOptions,
-        mapCallback: (err: BusinessError, controller: map.MapComponentController) => {
+        // Map Kit 成功时传的 err 是 null，签名要允许 null 才能往下传。
+        mapCallback: (err: BusinessError | null, controller: map.MapComponentController | null) => {
           this.onMapReady(err, controller);
         }
       })
