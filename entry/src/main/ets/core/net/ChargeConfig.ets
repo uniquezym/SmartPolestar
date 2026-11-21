@@ -85,6 +85,23 @@ export interface ChargeConfigSnapshot {
 }
 
 /**
+ * 单项配置的读回结果。
+ *
+ * **为什么需要 pending**：车端接受了指令不等于已经生效 ——
+ * 官方 App 的 Status 里有 SENT(1)「已发出」与 DELIVERED(2)「已送达」，
+ * 这两种状态下设置还可能失败（车辆无网、指令被拒）。
+ *
+ * 官方 App 靠 `GetTargetSocResponse.pendingTargetSoc`（field 4）判断
+ * 「还在生效中」，pending 为空才算真正生效。这里沿用同一套判据。
+ */
+export interface ChargeItemState {
+  /** 已生效的值（百分比 / 安培 / 分钟数），-1 表示未知。 */
+  value: number;
+  /** 是否还在生效中（车端 pending 不为空）。 */
+  pending: boolean;
+}
+
+/**
  * 一次设置的结果。
  */
 export interface ChargeConfigResult {
@@ -367,6 +384,58 @@ export class ChargeConfig {
   }
 
   /**
+   * 读当前充电上限，含「是否还在生效中」。
+   *
+   * 响应结构（GetTargetSocResponse）：
+   *   field 1 = id       field 2 = vin
+   *   field 3 = targetSoc       （TargetSoc 消息）
+   *   field 4 = pendingTargetSoc（TargetSoc 消息，pending 不为空 = 还在生效中）
+   *   field 5 = updatedAt
+   *
+   * `targetSoc` 与 `pendingTargetSoc` 都是 TargetSoc 消息，
+   * 里面的 field 1 才是真正的百分比。
+   */
+  static async readTargetSocState(client: GrpcClient, vin: string): Promise<ChargeItemState> {
+    try {
+      const payload = ChargeConfig.readRequest(vin);
+      const response = await client.callStreamFirst(GrpcClient.SERVICE_TARGET_SOC, 'GetTargetSoc',
+        vin, payload, GrpcClient.DEFAULT_TIMEOUT_MS, true);
+      const fields = ChargeConfig.unwrap(response);
+      return {
+        value: ChargeConfig.readTargetSocValue(ProtoValue.get(fields, 3)),
+        pending: ChargeConfig.readPendingFlag(ProtoValue.get(fields, 4))
+      };
+    } catch (err) {
+      Log.warn(TAG, `读取充电上限失败: ${(err as Error).message}`);
+      return { value: -1, pending: false };
+    }
+  }
+
+  /**
+   * 从 TargetSoc 消息里取百分比。
+   *
+   * TargetSoc 消息的 field 1 = batteryChargeTargetLevel（百分比）。
+   */
+  private static readTargetSocValue(value: number | Uint8Array | undefined): number {
+    if (!(value instanceof Uint8Array)) {
+      return -1;
+    }
+    const inner = new ProtoReader(value).decode();
+    const level = ProtoValue.asInteger(ProtoValue.get(inner, 1));
+    return level === undefined ? -1 : level;
+  }
+
+  /**
+   * 判断 pending 字段是否非空。
+   *
+   * 官方 App 用 `hasPendingTargetSoc()` 判断 —— 有值就说明车端还在生效中，
+   * 这时候读到的 targetSoc 可能还是旧值。
+   */
+  private static readPendingFlag(value: number | Uint8Array | undefined): boolean {
+    return value instanceof Uint8Array && value.length > 0;
+  }
+
+  /**
    * 读当前电流上限。
    *
    * @returns 电流上限（安培）；读取失败返回 -1
@@ -384,6 +453,43 @@ export class ChargeConfig {
       Log.warn(TAG, `读取电流上限失败: ${(err as Error).message}`);
       return -1;
     }
+  }
+
+  /**
+   * 读当前电流上限，含「是否还在生效中」。
+   *
+   * 响应结构（GetAmpLimitResponse）：
+   *   field 1 = id       field 2 = vin
+   *   field 3 = ampLimit        （AmpLimit 消息）
+   *   field 4 = pendingAmpLimit （AmpLimit 消息，pending 不为空 = 还在生效中）
+   *   field 5 = updatedAt
+   */
+  static async readAmpLimitState(client: GrpcClient, vin: string): Promise<ChargeItemState> {
+    try {
+      const payload = ChargeConfig.readRequest(vin);
+      const response = await client.callStreamFirst(GrpcClient.SERVICE_AMP_LIMIT, 'GetAmpLimit',
+        vin, payload, GrpcClient.DEFAULT_TIMEOUT_MS, true);
+      const fields = ChargeConfig.unwrap(response);
+      return {
+        value: ChargeConfig.readAmpLimitValue(ProtoValue.get(fields, 3)),
+        pending: ChargeConfig.readPendingFlag(ProtoValue.get(fields, 4))
+      };
+    } catch (err) {
+      Log.warn(TAG, `读取电流上限失败: ${(err as Error).message}`);
+      return { value: -1, pending: false };
+    }
+  }
+
+  /**
+   * 从 AmpLimit 消息里取安培数。
+   */
+  private static readAmpLimitValue(value: number | Uint8Array | undefined): number {
+    if (!(value instanceof Uint8Array)) {
+      return -1;
+    }
+    const inner = new ProtoReader(value).decode();
+    const level = ProtoValue.asInteger(ProtoValue.get(inner, 1));
+    return level === undefined ? -1 : level;
   }
 
   /**
@@ -541,13 +647,36 @@ export class ChargeConfig {
         Log.info(TAG, `充电配置已下发: ${label}`);
         return { success: true, message: `${label}已保存` };
       }
-      const detail = message.length > 0 ? message : `状态码 ${status}`;
+      const detail = message.length > 0 ? message : ChargeConfig.statusDetail(status);
       Log.warn(TAG, `充电配置下发失败: ${label} ${detail}`);
       return { success: false, message: `${label}保存失败：${detail}` };
     } catch (err) {
       const e = err as BusinessError;
       Log.error(TAG, `充电配置下发异常: ${label} ${e.message}`);
       return { success: false, message: `${label}保存失败：${e.message}` };
+    }
+  }
+
+  /**
+   * 把失败的状态码翻译成人话。
+   *
+   * `Status` 枚举里 CAR_OFFLINE(5) 是最常见的失败原因 ——
+   * 车辆离线时给一句「车辆已离线，请检查车辆状态」比「状态码 5」有用得多。
+   *
+   * @param status 失败的状态码
+   */
+  private static statusDetail(status: number): string {
+    switch (status) {
+      case 5:
+        return '车辆已离线，请检查车辆状态';
+      case 6:
+        return '车辆报错，请检查车辆状态';
+      case 7:
+        return '下发失败，请重试';
+      case 0:
+        return '未知错误，请重试';
+      default:
+        return `状态码 ${status}`;
     }
   }
 }

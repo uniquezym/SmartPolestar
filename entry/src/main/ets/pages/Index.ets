@@ -263,6 +263,16 @@ struct Index {
    */
   private static readonly CLIMATE_ERROR_MAX_RUNTIME: number = 8;
 
+  /**
+   * 充电配置下发后的延时核对间隔（毫秒）。
+   *
+   * **为什么需要核对**：车端接受了指令不等于已经生效 ——
+   * Status 里的 SENT(1)「已发出」与 DELIVERED(2)「已送达」都可能出现，
+   * 这时设置还可能因为车辆无网等原因失败。官方 App 同样是延时 40 秒
+   * 再核对，值没变就提示「指令超时，车辆无网或网络不佳」。
+   */
+  private static readonly CHARGE_VERIFY_DELAY_MS: number = 40000;
+
   /** 正在拉取车辆状态。顶栏右上角显示刷新动效。 */
   @State loading: boolean = false;
   /** 下拉刷新指示器状态。 */
@@ -502,6 +512,8 @@ struct Index {
   private chargeTimer: number = -1;
   /** 充电轮询是否已有请求在途，避免并发重复拉取。 */
   private chargePolling: boolean = false;
+  /** 充电配置下发后的延时核对定时器句柄。 */
+  private chargeVerifyTimer: number = -1;
   /** 空调 / 净化状态检查是否已有请求在途。 */
   private climatePolling: boolean = false;
   /** 空调剩余运行分钟数，用于推算预计结束时刻。 */
@@ -714,6 +726,7 @@ struct Index {
     this.stopClimateTimer();
     this.stopLocationTimer();
     this.stopVehicleStream();
+    this.clearChargeVerify();
     // 页面销毁 → 实况窗心跳一并停掉。
     // 注意 onPageHide 不停它 —— 实况窗本来就是在退到后台后才被看到的，
     // 心跳必须跟着页面活着，才能刷新实况窗、避免被系统按未更新时间收掉。
@@ -3729,11 +3742,95 @@ struct Index {
       if (savedLabels.length > 0) {
         await this.loadChargeConfig(vin, false);
         this.restoreSavedChargeValues(savedSoc, savedAmp, savedTimerOn, savedTimerStart, savedTimerStop);
+        // 安排延时核对 —— 车端可能还没真正生效，
+        // 延时回读一次确认，失败时提示用户核对实车状态。
+        this.scheduleChargeVerify(savedSoc, savedAmp);
       }
       return;
     }
     // 部分成功：先说成功保存了哪几项，再说哪项失败。
     this.toast(savedText.length > 0 ? `${savedText}已保存；${failures.join('；')}` : failures.join('；'));
+  }
+
+  /**
+   * 安排充电配置的延时核对。
+   *
+   * 车端接受了指令不代表已经生效 —— Status 里的 SENT(1) / DELIVERED(2)
+   * 都可能出现，这时设置还可能因为车辆无网等原因失败。
+   * 延时 40 秒回读一次（对齐官方 App），值还没变就提示核对实车状态。
+   *
+   * @param expectedSoc 期望生效的充电上限，-1 表示不核对这一项
+   * @param expectedAmp 期望生效的电流上限，-1 表示不核对这一项
+   */
+  private scheduleChargeVerify(expectedSoc: number, expectedAmp: number): void {
+    this.clearChargeVerify();
+    this.chargeVerifyTimer = setTimeout(() => {
+      this.chargeVerifyTimer = -1;
+      this.verifyChargeApplied(expectedSoc, expectedAmp);
+    }, Index.CHARGE_VERIFY_DELAY_MS);
+    Log.info(TAG, `安排充电配置核对，${Index.CHARGE_VERIFY_DELAY_MS}ms 后回读`);
+  }
+
+  /**
+   * 清掉已排的核对定时器。
+   */
+  private clearChargeVerify(): void {
+    if (this.chargeVerifyTimer !== -1) {
+      clearTimeout(this.chargeVerifyTimer);
+      this.chargeVerifyTimer = -1;
+    }
+  }
+
+  /**
+   * 延时核对：确认车端是否真的生效了。
+   *
+   * 车端还在生效中（pending 不为空）说明只是慢，不算失败 —— 再等一轮。
+   * 值确实没变才提示用户核对实车状态。
+   *
+   * @param expectedSoc 期望生效的充电上限
+   * @param expectedAmp 期望生效的电流上限
+   */
+  private async verifyChargeApplied(expectedSoc: number, expectedAmp: number): Promise<void> {
+    const client = this.repository?.getClient();
+    const vin = this.vin;
+    if (client === undefined || vin.length === 0) {
+      return;
+    }
+    const failed: string[] = [];
+    let stillPending = false;
+
+    try {
+      if (expectedSoc >= 0) {
+        const state = await ChargeConfig.readTargetSocState(client, vin);
+        Log.info(TAG, `核对充电上限: 期望=${expectedSoc} 实际=${state.value} pending=${state.pending}`);
+        if (state.pending) {
+          stillPending = true;
+        } else if (state.value !== expectedSoc) {
+          failed.push('充电上限');
+        }
+      }
+      if (expectedAmp >= 0) {
+        const state = await ChargeConfig.readAmpLimitState(client, vin);
+        Log.info(TAG, `核对电流上限: 期望=${expectedAmp} 实际=${state.value} pending=${state.pending}`);
+        if (state.pending) {
+          stillPending = true;
+        } else if (state.value !== expectedAmp) {
+          failed.push('电流上限');
+        }
+      }
+    } catch (err) {
+      Log.warn(TAG, `核对充电配置失败: ${(err as Error).message}`);
+      return;
+    }
+
+    // 车端还在生效中 —— 只是慢，不是失败。再等一轮。
+    if (stillPending && failed.length === 0) {
+      this.scheduleChargeVerify(expectedSoc, expectedAmp);
+      return;
+    }
+    if (failed.length > 0) {
+      this.toast(`${failed.join('、')}未生效，指令超时，车辆无网或网络不佳。请及时核对实车状态`);
+    }
   }
 
   /**
