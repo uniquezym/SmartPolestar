@@ -14,6 +14,7 @@ import { Control } from './Control';
 import { Detail } from './Detail';
 import { PlaceResolver } from '../core/vehicle/PlaceResolver';
 import { MapLauncher } from '../core/vehicle/MapLauncher';
+import { ParkedPlaceInfo } from '../core/vehicle/ParkedPlaceInfo';
 import { CardPublisher } from '../core/vehicle/CardPublisher';
 import { BiometricGuard, BiometricResult } from '../core/vehicle/BiometricGuard';
 import { SessionStore } from '../core/session/SessionStore';
@@ -305,8 +306,8 @@ struct Index {
   /** 停车时刻（epoch millis），用于文案定时刷新。 */
   @State parkedTimestamp: number = 0;
   @State parkedCoordinate: string = '';
-  /** 停车地点名（经纬度反查结果）。解析中时为空串。 */
-  @State parkedPlace: string = '';
+  /** 停车地点信息（经纬度反查结果）。解析中时为 undefined。 */
+  @State parkedPlace: ParkedPlaceInfo | undefined = undefined;
   /** 停车纬度。 */
   @State parkedLatitude: number = -1;
   /** 停车经度。 */
@@ -2781,18 +2782,54 @@ struct Index {
   /**
    * 反查停车坐标对应的地点名。
    *
-   * 失败时保持空串，UI 回退显示原始坐标 —— 地点名是补充信息，
+   * 失败时保持 undefined，UI 回退显示原始坐标 —— 地点名是补充信息，
    * 不该因为它拖垮整个概览页。
    */
   private async resolveParkedPlace(): Promise<void> {
     const lat = this.parkedLatitude;
     const lon = this.parkedLongitude;
-    this.parkedPlace = '';
-    const name = await PlaceResolver.resolve(lat, lon);
+    const ctx = this.context;
+    if (ctx === undefined) {
+      return;
+    }
+    this.parkedPlace = undefined;
+    const info = await PlaceResolver.resolve(ctx, lat, lon);
     // 期间坐标可能已变，丢弃过期结果
     if (lat === this.parkedLatitude && lon === this.parkedLongitude) {
-      this.parkedPlace = name;
+      this.parkedPlace = info;
     }
+  }
+
+  /**
+   * 「最后停车位置」的副信息 —— AOI 名与 POI 名合并成一行。
+   *
+   * 反查失败时回退到原始坐标。
+   */
+  private parkedDetail(): string {
+    const place = this.parkedPlace;
+    if (place === undefined) {
+      return this.parkedCoordinate;
+    }
+    const main = place.displayName();
+    const secondary = place.secondaryName();
+    if (main.length === 0) {
+      return this.parkedCoordinate;
+    }
+    if (secondary.length === 0) {
+      return main;
+    }
+    return `${main} · ${secondary}`;
+  }
+
+  /**
+   * 「最后停车位置」右侧标签 —— POI 分类与距离。
+   */
+  private parkedTag(): string {
+    const place = this.parkedPlace;
+    if (place === undefined) {
+      return '';
+    }
+    return place.tagText();
   }
 
   /**
@@ -2806,8 +2843,9 @@ struct Index {
       this.toast('暂无停车位置信息');
       return;
     }
+    const placeName = this.parkedPlace !== undefined ? this.parkedPlace.displayName() : '';
     const opened = await MapLauncher.open(
-      this.context, this.parkedLatitude, this.parkedLongitude, this.parkedPlace);
+      this.context, this.parkedLatitude, this.parkedLongitude, placeName);
     if (!opened) {
       // 系统没有可响应 geo: 的地图应用，退到内置在线地图
       this.getUIContext().getRouter().pushUrl({
@@ -2815,7 +2853,7 @@ struct Index {
         params: {
           latitude: this.parkedLatitude,
           longitude: this.parkedLongitude,
-          name: this.parkedPlace
+          name: placeName
         }
       });
     }
@@ -4920,7 +4958,8 @@ struct Index {
               icon: AppIconName.LOCATION,
               label: '最后停车位置',
               value: this.parkedTime,
-              detail: this.parkedPlace.length > 0 ? this.parkedPlace : this.parkedCoordinate,
+              detail: this.parkedDetail(),
+              tag: this.parkedTag(),
               showChevron: true,
               // 页尾最后一行，下面没有下一项，不需要分隔线
               showDivider: false,

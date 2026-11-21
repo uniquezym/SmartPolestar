@@ -1,41 +1,72 @@
+import { common } from '@kit.AbilityKit';
 import { geoLocationManager } from '@kit.LocationKit';
 import { BusinessError, Log } from '../../common/Log';
 import { CoordinateTransform } from './CoordinateTransform';
+import { MapKitPlaceResolver } from './MapKitPlaceResolver';
+import { ParkedPlaceInfo } from './ParkedPlaceInfo';
 
 /**
- * 经纬度反查地点名。
+ * 经纬度反查地点信息。
  *
- * 使用系统自带的地理编码能力（geoLocationManager），无需 API Key。
- * 结果只用于「最后停车位置」的补充说明，拿不到时降级显示原始坐标。
+ * 两条数据源，Map Kit 优先，系统逆地理编码兜底：
+ *   ① Map Kit 逆地理编码 —— 能拿到 AOI（小区 / 园区）、POI（停车场 / 商场）与道路名，
+ *      精度最高。权益未开通或调用失败时自动降级。
+ *   ② 系统 geoLocationManager 逆地理编码 —— 无需任何授权，但只能到路名级。
+ *   ③ 都失败 → 返回 undefined，UI 回退显示原始坐标。
  *
- * 【坐标系】车辆接口返回的是 GCJ02 坐标，而系统逆地理编码只接受 WGS84。
- * 直接传原始坐标会偏出几百米，导致逆地理编码只返回到区级。
- * 因此这里先把 GCJ02 转成 WGS84 再查询。
+ * 【坐标系】
+ *   - 系统逆地理编码只接受 WGS84，所以这条路径要先 GCJ02 → WGS84。
+ *     不转换的话查询点会偏出去几百米，结果退化成只返回到区级。
+ *   - Map Kit 大陆区底图就是 GCJ02，直接传原始坐标，不转换。
  */
 export class PlaceResolver {
   /** 缓存键的坐标精度（保留 5 位小数，约 1m 级）。 */
   private static readonly PRECISION: number = 100000;
-  /** 坐标 → 地点名 的缓存。 */
-  private static readonly cache: Map<string, string> = new Map<string, string>();
+  /** 坐标 → 地点信息 的缓存。 */
+  private static readonly cache: Map<string, ParkedPlaceInfo> = new Map<string, ParkedPlaceInfo>();
 
   /**
-   * 反查坐标对应的地点名称。
+   * 反查坐标对应的地点信息。
    *
+   * @param context   上下文（Map Kit 需要）
    * @param latitude  纬度（GCJ02）
    * @param longitude 经度（GCJ02）
-   * @returns 地点名；无法解析时返回空字符串
+   * @returns 地点信息；无法解析时返回 undefined
    */
-  static async resolve(latitude: number, longitude: number): Promise<string> {
+  static async resolve(context: common.Context, latitude: number, longitude: number):
+    Promise<ParkedPlaceInfo | undefined> {
     const key = PlaceResolver.cacheKey(latitude, longitude);
     const cached = PlaceResolver.cache.get(key);
     if (cached !== undefined) {
       return cached;
     }
 
+    // ① Map Kit
+    const mapKit = await MapKitPlaceResolver.resolve(context, latitude, longitude);
+    if (mapKit !== undefined && !mapKit.isEmpty()) {
+      PlaceResolver.cache.set(key, mapKit);
+      return mapKit;
+    }
+
+    // ② 系统逆地理编码兜底
+    const system = await PlaceResolver.resolveBySystem(latitude, longitude);
+    if (system !== undefined) {
+      PlaceResolver.cache.set(key, system);
+      return system;
+    }
+
+    return undefined;
+  }
+
+  /**
+   * 系统逆地理编码兜底。只拿得到路名级信息，没有 AOI / POI 概念。
+   */
+  private static async resolveBySystem(latitude: number, longitude: number):
+    Promise<ParkedPlaceInfo | undefined> {
     try {
       if (!geoLocationManager.isGeocoderAvailable()) {
         Log.warn('系统地理编码服务不可用');
-        return '';
+        return undefined;
       }
       // GCJ02 → WGS84：不转换的话查询点会偏出去几百米，
       // 系统只能反查到区级（placeName 形如「中国上海市青浦区」）。
@@ -50,7 +81,7 @@ export class PlaceResolver {
       const addresses = await geoLocationManager.getAddressesFromLocation(request);
       if (addresses.length === 0) {
         Log.warn('反查地点名没有返回结果');
-        return '';
+        return undefined;
       }
 
       // 取「详细地址」字段（placeName）。对齐官方示例：只用第一条结果。
@@ -59,16 +90,21 @@ export class PlaceResolver {
         name = PlaceResolver.fallback(addresses[0]);
       }
 
-      Log.info(`反查地点名结果: ${name} | ${PlaceResolver.dump(addresses[0])}`);
-
-      if (name.length > 0) {
-        PlaceResolver.cache.set(key, name);
+      Log.info(`系统反查地点名结果: ${name} | ${PlaceResolver.dump(addresses[0])}`);
+      if (name.length === 0) {
+        return undefined;
       }
-      return name;
+
+      const info = new ParkedPlaceInfo();
+      info.address = name;
+      if (addresses[0].roadName !== undefined) {
+        info.roadName = addresses[0].roadName;
+      }
+      return info;
     } catch (err) {
       const e = err as BusinessError;
-      Log.warn(`反查地点名失败: code=${e.code} ${e.message}`);
-      return '';
+      Log.warn(`系统反查地点名失败: code=${e.code} ${e.message}`);
+      return undefined;
     }
   }
 
