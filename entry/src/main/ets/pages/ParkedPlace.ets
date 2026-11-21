@@ -43,6 +43,24 @@ struct ParkedPlace {
 
   /** 地图控制器。 */
   private mapController: map.MapComponentController | undefined = undefined;
+  /**
+   * 地图参数。
+   *
+   * 必须是**稳定引用** —— MapComponent 收到新的 mapOptions 对象会重建底层
+   * 地图实例，标记会被一起清掉。页面上任何 @State 变化都会触发 build，
+   * 所以这里在 aboutToAppear 里一次性构造好，之后不再换对象。
+   */
+  private mapOptions: mapCommon.MapOptions = {
+    position: { target: { latitude: 0, longitude: 0 }, zoom: 17 },
+    myLocationControlsEnabled: false,
+    zoomControlsEnabled: false,
+    scaleControlsEnabled: false,
+    compassControlsEnabled: false
+  };
+  /** 当前位置是否已经打过标记，避免重复打。 */
+  private currentMarked: boolean = false;
+  /** 停车位标记是否已经打过。 */
+  private parkedMarked: boolean = false;
 
   aboutToAppear(): void {
     const params = this.getUIContext().getRouter().getParams() as ParkedPlaceParams;
@@ -51,6 +69,13 @@ struct ParkedPlace {
       this.longitude = params.longitude;
       this.parkedTimestamp = params.timestamp;
     }
+    this.mapOptions = {
+      position: { target: this.parkingLatLng(), zoom: 17 },
+      myLocationControlsEnabled: false,
+      zoomControlsEnabled: false,
+      scaleControlsEnabled: false,
+      compassControlsEnabled: false
+    };
     this.resolvePlaceName();
     this.requestLocationPermission();
     this.loadCurrentLocation();
@@ -105,7 +130,12 @@ struct ParkedPlace {
       const gcj = CoordinateTransform.wgs2Gcj(location.latitude, location.longitude);
       this.currentLatitude = gcj[0];
       this.currentLongitude = gcj[1];
-      this.frameBothPoints();
+      // 定位拿到时地图可能已经初始化好了，直接补打当前位置标记。
+      if (this.mapController !== undefined) {
+        this.setupMarkers(this.mapController);
+      } else {
+        this.frameBothPoints();
+      }
     } catch (err) {
       const e = err as BusinessError;
       Log.warn(`获取当前位置失败: code=${e.code} ${e.message}`);
@@ -148,7 +178,7 @@ struct ParkedPlace {
   }
 
   /**
-   * 地图初始化完成：打停车位标记、开我的位置图层。
+   * 地图初始化完成：打两个标记、框住两点。
    */
   private onMapReady(err: BusinessError, controller: map.MapComponentController): void {
     if (err.code !== 0) {
@@ -156,15 +186,53 @@ struct ParkedPlace {
       return;
     }
     this.mapController = controller;
-    controller.setMyLocationEnabled(true);
-    // 打标记是异步的，失败只影响标记显示，不该变成未捕获异常。
-    controller.addMarker({
-      position: this.parkingLatLng(),
-      title: '车辆停放位置',
-      snippet: this.displayName()
-    }).catch((err: BusinessError) => {
-      Log.warn(`添加停车位标记失败: code=${err.code} ${err.message}`);
-    });
+    this.setupMarkers(controller);
+  }
+
+  /**
+   * 打标记并调整镜头。
+   *
+   * 两个标记都用自己的图标，不用地图的默认标记 —— 默认标记样式不可控，
+   * 而「当前位置」与「停车位置」必须一眼能分清。
+   *
+   * 「当前位置」用自绘蓝点而不是地图的内置定位图层：内置图层依赖系统定位源，
+   * 在应用里表现不稳定（权限刚授予、定位源未就绪时都不显示）。
+   */
+  private async setupMarkers(controller: map.MapComponentController): Promise<void> {
+    if (!this.parkedMarked) {
+      try {
+        await controller.addMarker({
+          position: this.parkingLatLng(),
+          icon: $r('app.media.ic_map_car'),
+          title: '车辆停放位置',
+          snippet: this.displayName(),
+          // 图标锚点在底部尖角上 —— 车标的尖角指向停车点。
+          anchorU: 0.5,
+          anchorV: 1.0
+        });
+        this.parkedMarked = true;
+        Log.info(`停车位标记已添加: ${this.latitude}, ${this.longitude}`);
+      } catch (err) {
+        const e = err as BusinessError;
+        Log.warn(`添加停车位标记失败: code=${e.code} ${e.message}`);
+      }
+    }
+
+    if (this.currentLatitude >= 0 && !this.currentMarked) {
+      try {
+        await controller.addMarker({
+          position: { latitude: this.currentLatitude, longitude: this.currentLongitude },
+          icon: $r('app.media.ic_map_current'),
+          title: '当前位置'
+        });
+        this.currentMarked = true;
+        Log.info(`当前位置标记已添加: ${this.currentLatitude}, ${this.currentLongitude}`);
+      } catch (err) {
+        const e = err as BusinessError;
+        Log.warn(`添加当前位置标记失败: code=${e.code} ${e.message}`);
+      }
+    }
+
     this.frameBothPoints();
   }
 
@@ -289,16 +357,7 @@ struct ParkedPlace {
 
       // ---------- 地图 ----------
       MapComponent({
-        mapOptions: {
-          position: {
-            target: this.parkingLatLng(),
-            zoom: 17
-          },
-          myLocationControlsEnabled: true,
-          zoomControlsEnabled: false,
-          scaleControlsEnabled: false,
-          compassControlsEnabled: false
-        },
+        mapOptions: this.mapOptions,
         mapCallback: (err: BusinessError, controller: map.MapComponentController) => {
           this.onMapReady(err, controller);
         }
