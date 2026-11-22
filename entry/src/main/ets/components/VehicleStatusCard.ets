@@ -51,7 +51,7 @@ export interface StatusEntry {
  * 车辆状态卡片。
  *
  * 复刻海外版 Polestar App 的「状态条」：白色圆角卡片，左侧彩色数字徽章
- * （数字 = 状态条数），中间状态文案，右侧下钻箭头。
+ * （数字 = 当前这条的序号，第几条），中间状态文案，右侧下钻箭头。
  *
  * 多条状态时轮播显示 —— 但不是滚动，而是整条内容先淡出、
  * 换上新内容再淡入，读起来是「换了一条状态」。
@@ -197,8 +197,8 @@ export struct VehicleStatusCard {
   build() {
     // ---------- 卡片主体 ----------
     Row({ space: 12 }) {
-      // 徽章：数字 = 状态条数
-      Text(`${this.entries.length}`)
+      // 徽章：数字 = 当前这条的序号（第几条）
+      Text(`${this.safeIndex() + 1}`)
         .fontSize(12)
         .fontWeight(FontWeight.Bold)
         .fontColor($r('app.color.app_on_accent'))
