@@ -73,6 +73,14 @@ struct Index {
   private static readonly STATUS_AREA_HEIGHT: number = 44;
 
   /**
+   * 半模态内容的高度上限（vp）。
+   *
+   * 剩下的空间留给面板标题与拖动条 —— 内容再长也不能把面板顶到全屏，
+   * 否则就失去了「半模态」的语义。超出后由内部 Scroll 承担滚动。
+   */
+  private static readonly SHEET_MAX_CONTENT_HEIGHT: number = 520;
+
+  /**
    * 充电中轮询电池状态的周期（毫秒）。
    *
    * 只在「充电中 / 智能充电」时启用，且只读 battery 一个域，
@@ -5282,40 +5290,52 @@ struct Index {
    * 用的是控制页里的那张充电配置卡（ChargeConfigCard）——
    * 同一份组件、同一份状态，面板里改上限保存，
    * 控制页里的那张也跟着变。
+   *
+   * 布局与控制页保持一致：Scroll → Column（左右 18vp 内边距）→ 卡片。
+   * 卡片自身还有 16vp 内边距，两层叠加后文字的起始位置与控制页相同。
    */
   @Builder
   private chargeSheetBuilder() {
-    ChargeConfigCard({
-      battery: this.batteryLevel,
-      targetSoc: this.draftChargeSoc,
-      ampLimit: this.draftChargeAmp,
-      timerActivated: this.draftChargeTimerOn,
-      timerStartMinutes: this.draftChargeStartMinutes,
-      timerStopMinutes: this.draftChargeStopMinutes,
-      saving: this.chargeSaving,
-      // 已生效值：用来判断编辑值与车端是否一致，决定保存按钮是否可用
-      savedTargetSoc: this.chargeTargetSoc,
-      savedAmpLimit: this.chargeAmpLimit,
-      savedTimerActivated: this.chargeTimerActivated,
-      savedTimerStartMinutes: this.chargeTimerStartMinutes,
-      savedTimerStopMinutes: this.chargeTimerStopMinutes,
-      onTargetSocChange: (percent: number) => {
-        this.changeChargeTargetSoc(percent);
-      },
-      onAmpLimitChange: (amps: number) => {
-        this.changeChargeAmpLimit(amps);
-      },
-      onTimerToggle: (activated: boolean) => {
-        this.changeChargeTimerToggle(activated);
-      },
-      onTimerChange: (startMinutes: number, stopMinutes: number) => {
-        this.changeChargeTimer(startMinutes, stopMinutes);
-      },
-      onSave: () => {
-        this.saveChargeConfig();
+    Scroll() {
+      Column() {
+        ChargeConfigCard({
+          battery: this.batteryLevel,
+          targetSoc: this.draftChargeSoc,
+          ampLimit: this.draftChargeAmp,
+          timerActivated: this.draftChargeTimerOn,
+          timerStartMinutes: this.draftChargeStartMinutes,
+          timerStopMinutes: this.draftChargeStopMinutes,
+          saving: this.chargeSaving,
+          // 已生效值：用来判断编辑值与车端是否一致，决定保存按钮是否可用
+          savedTargetSoc: this.chargeTargetSoc,
+          savedAmpLimit: this.chargeAmpLimit,
+          savedTimerActivated: this.chargeTimerActivated,
+          savedTimerStartMinutes: this.chargeTimerStartMinutes,
+          savedTimerStopMinutes: this.chargeTimerStopMinutes,
+          onTargetSocChange: (percent: number) => {
+            this.changeChargeTargetSoc(percent);
+          },
+          onAmpLimitChange: (amps: number) => {
+            this.changeChargeAmpLimit(amps);
+          },
+          onTimerToggle: (activated: boolean) => {
+            this.changeChargeTimerToggle(activated);
+          },
+          onTimerChange: (startMinutes: number, stopMinutes: number) => {
+            this.changeChargeTimer(startMinutes, stopMinutes);
+          },
+          onSave: () => {
+            this.saveChargeConfig();
+          }
+        })
       }
-    })
+      .width('100%')
+      .padding({ left: 18, right: 18, top: 4, bottom: 16 })
+    }
     .width('100%')
-    .margin({ left: 16, right: 16, bottom: 16 })
+    // 不设固定高度：面板用 SheetSize.FIT_CONTENT，高度由内容撑开。
+    // maxHeight 兜住超长内容，超出后由内部 Scroll 内部滚动。
+    .constraintSize({ maxHeight: Index.SHEET_MAX_CONTENT_HEIGHT })
+    .align(Alignment.Top)
   }
 }
