@@ -68,6 +68,27 @@ export struct VehicleStatusCard {
   @Prop intervalMs: number = 5000;
   /** 是否处于活跃状态（页面可见）。页面隐藏时停掉轮播。 */
   @Prop @Watch('onActiveChanged') active: boolean = true;
+  /**
+   * 右侧箭头点击回调。
+   *
+   * 为空则箭头不可点 —— 不同状态能下钻到的内容不一样，
+   * 由父组件决定当前这条能不能点。
+   */
+  onArrowTap?: () => void;
+  /**
+   * 当前显示下标变化时的回调。
+   *
+   * 父组件据此判断「当前这条状态能不能下钻」——
+   * 充电枪连接时能弹出充电卡片，其他状态先不处理。
+   */
+  onCurrentChange?: (index: number) => void;
+  /**
+   * 右侧箭头是否可用。
+   *
+   * 当前这条状态没有可下钻的内容时置 false ——
+   * 箭头会变淡且点击无响应，避免用户点了没动静。
+   */
+  @Prop arrowEnabled: boolean = false;
 
   /** 当前显示第几条。 */
   @State private currentIndex: number = 0;
@@ -131,7 +152,10 @@ export struct VehicleStatusCard {
     const count = this.entries.length;
     if (count <= 1) {
       // 只有一条状态时不需要轮播，把下标归零以免指向已消失的条目。
-      this.currentIndex = 0;
+      if (this.currentIndex !== 0) {
+        this.currentIndex = 0;
+        this.notifyCurrent();
+      }
       return;
     }
     this.visible = 0;
@@ -150,7 +174,17 @@ export struct VehicleStatusCard {
       }
       this.currentIndex = (this.safeIndex() + 1) % total;
       this.visible = 1;
+      this.notifyCurrent();
     }, FADE_OUT_MS);
+  }
+
+  /**
+   * 通知父组件当前显示的下标变了。
+   */
+  private notifyCurrent(): void {
+    if (this.onCurrentChange !== undefined) {
+      this.onCurrentChange(this.currentIndex);
+    }
   }
 
   /**
@@ -235,14 +269,20 @@ export struct VehicleStatusCard {
       .translate({ x: 0, y: (1 - this.visible) * SLIDE_DISTANCE })
       .animation({ duration: FADE_DURATION_MS, curve: Curve.EaseOut })
 
-      // 下钻箭头
+      // 下钻箭头：主题色（品牌深蓝），与页面其它强调元素一致
       AppIcon({
         name: AppIconName.ARROW_UP_RIGHT,
         iconSize: 16,
-        color: $r('app.color.app_polar')
+        color: $r('app.color.app_accent')
       })
         .width(16)
         .height(16)
+        .opacity(this.arrowEnabled ? 1 : 0.3)
+        .onClick(() => {
+          if (this.arrowEnabled && this.onArrowTap !== undefined) {
+            this.onArrowTap();
+          }
+        })
     }
     .width('100%')
     .height(44)

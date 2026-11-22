@@ -11,6 +11,7 @@ import { StateToggle, ToggleKind, TogglePhase } from '../components/StateToggle'
 import { VehiclePlan } from '../components/VehiclePlan';
 import { StateRow } from '../components/StateRow';
 import { VehicleStatusCard, StatusEntry, StatusTone } from '../components/VehicleStatusCard';
+import { ChargeConfigCard } from '../components/ChargeConfigCard';
 import { Control } from './Control';
 import { Detail } from './Detail';
 import { PlaceResolver } from '../core/vehicle/PlaceResolver';
@@ -480,6 +481,21 @@ struct Index {
    * 回到前台看到的内容也对不上当时的状态。
    */
   @State pageActive: boolean = true;
+
+  /**
+   * 充电状态卡片半模态是否打开。
+   *
+   * 状态卡片右侧箭头点开 —— 充电枪连接时弹充电卡片。
+   */
+  @State chargeSheetOpen: boolean = false;
+
+  /**
+   * 状态卡片当前显示第几条。
+   *
+   * 轮播时会变 —— 用来判断箭头能不能点：
+   * 只有轮播到「充电相关」那一条时才给下钻入口。
+   */
+  @State statusCurrentIndex: number = 0;
 
   /**
    * Tab 内容的滑动控制器。
@@ -2597,6 +2613,61 @@ struct Index {
       return `${m} 分钟`;
     }
     return m === 0 ? `${h} 小时` : `${h} 小时 ${m} 分`;
+  }
+
+  /**
+   * 当前显示的状态是否与充电有关。
+   *
+   * 只有充电相关的那条才给下钻入口 —— 目前只有充电枪连接时
+   * 才弹出充电卡片，其他状态点了没反应。
+   */
+  private currentStatusIsCharge(): boolean {
+    const entries = this.statusEntries();
+    if (entries.length === 0) {
+      return false;
+    }
+    const index = this.statusCurrentIndex >= entries.length ? 0 : this.statusCurrentIndex;
+    return entries[index].title.indexOf('充电') >= 0;
+  }
+
+  /**
+   * 充电枪是否已连接。
+   *
+   * 充电卡片只在插了枪的时候才有意义 —— 没插枪时没什么可看的。
+   */
+  private chargerPlugged(): boolean {
+    const stage = this.chargeStage();
+    return stage !== ChargeStage.IDLE && stage !== ChargeStage.DISCHARGING;
+  }
+
+  /**
+   * 打开充电卡片半模态。
+   */
+  private openChargeSheet(): void {
+    if (!this.currentStatusIsCharge() || !this.chargerPlugged()) {
+      return;
+    }
+    this.chargeSheetOpen = true;
+  }
+
+  /**
+   * 充电卡片的标题文案。
+   */
+  private chargeSheetTitle(): SheetTitleOptions {
+    const stage = this.chargeStage();
+    if (stage === ChargeStage.COMPLETED) {
+      return { title: '充电完成' };
+    }
+    if (stage === ChargeStage.PAUSED) {
+      return { title: '充电已暂停' };
+    }
+    if (stage === ChargeStage.PLUGGED) {
+      return { title: '充电枪已连接' };
+    }
+    if (stage === ChargeStage.FAULT) {
+      return { title: '充电异常' };
+    }
+    return { title: '充电中' };
   }
 
   /**
@@ -4967,7 +5038,14 @@ struct Index {
               } else {
                 VehicleStatusCard({
                   entries: this.statusEntries(),
-                  active: this.pageActive
+                  active: this.pageActive,
+                  arrowEnabled: this.currentStatusIsCharge() && this.chargerPlugged(),
+                  onArrowTap: () => {
+                    this.openChargeSheet();
+                  },
+                  onCurrentChange: (index: number) => {
+                    this.statusCurrentIndex = index;
+                  }
                 })
                 .width('100%')
               }
@@ -5183,5 +5261,61 @@ struct Index {
     .width('100%')
     .height('100%')
     .backgroundColor($r('app.color.app_background'))
+    // ---------- 充电卡片半模态 ----------
+    // 挂在根节点上：弹起时概览页变暗但不销毁，关闭后回到原位置。
+    .bindSheet(this.chargeSheetOpen, this.chargeSheetBuilder(), {
+      height: SheetSize.FIT_CONTENT,
+      dragBar: true,
+      showClose: true,
+      maskColor: $r('app.color.app_scrim'),
+      backgroundColor: $r('app.color.app_background'),
+      title: this.chargeSheetTitle(),
+      onDisappear: () => {
+        this.chargeSheetOpen = false;
+      }
+    })
+  }
+
+  /**
+   * 充电卡片半模态的内容。
+   *
+   * 用的是控制页里的那张充电配置卡（ChargeConfigCard）——
+   * 同一份组件、同一份状态，面板里改上限保存，
+   * 控制页里的那张也跟着变。
+   */
+  @Builder
+  private chargeSheetBuilder() {
+    ChargeConfigCard({
+      battery: this.batteryLevel,
+      targetSoc: this.draftChargeSoc,
+      ampLimit: this.draftChargeAmp,
+      timerActivated: this.draftChargeTimerOn,
+      timerStartMinutes: this.draftChargeStartMinutes,
+      timerStopMinutes: this.draftChargeStopMinutes,
+      saving: this.chargeSaving,
+      // 已生效值：用来判断编辑值与车端是否一致，决定保存按钮是否可用
+      savedTargetSoc: this.chargeTargetSoc,
+      savedAmpLimit: this.chargeAmpLimit,
+      savedTimerActivated: this.chargeTimerActivated,
+      savedTimerStartMinutes: this.chargeTimerStartMinutes,
+      savedTimerStopMinutes: this.chargeTimerStopMinutes,
+      onTargetSocChange: (percent: number) => {
+        this.changeChargeTargetSoc(percent);
+      },
+      onAmpLimitChange: (amps: number) => {
+        this.changeChargeAmpLimit(amps);
+      },
+      onTimerToggle: (activated: boolean) => {
+        this.changeChargeTimerToggle(activated);
+      },
+      onTimerChange: (startMinutes: number, stopMinutes: number) => {
+        this.changeChargeTimer(startMinutes, stopMinutes);
+      },
+      onSave: () => {
+        this.saveChargeConfig();
+      }
+    })
+    .width('100%')
+    .margin({ left: 16, right: 16, bottom: 16 })
   }
 }

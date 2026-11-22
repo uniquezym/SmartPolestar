@@ -143,6 +143,10 @@
     {
       "name": "app_charge_fill_error",
       "value": "#D0655A"
+    },
+    {
+      "name": "app_scrim",
+      "value": "#66000000"
     }
   ]
 }
