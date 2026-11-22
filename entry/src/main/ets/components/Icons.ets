@@ -76,7 +76,9 @@ export enum AppIconName {
   /** 详情。 */
   TAB_DETAIL = 'tab_detail',
   /** 刷新。 */
-  REFRESH = 'refresh'
+  REFRESH = 'refresh',
+  /** 右上箭头（状态卡片的下钻入口）。 */
+  ARROW_UP_RIGHT = 'arrow_up_right'
 }
 
 /**
@@ -256,6 +258,11 @@ const SHAPES: Record<string, IconShape> = {
   [AppIconName.REFRESH]: {
     path: 'M20.5,12 A8.5,8.5 0 1 1 17.9,5.9 M20.5,4.5 L20.5,9 L16,9',
     strokeWidth: 1.7
+  },
+  // 右上箭头：状态卡片右侧的下钻入口
+  [AppIconName.ARROW_UP_RIGHT]: {
+    path: 'M6.5,17.5 L17.5,6.5 M8.5,6.5 L17.5,6.5 L17.5,15.5',
+    strokeWidth: 1.9
   }
 };
 

@@ -10,6 +10,7 @@ import { AppIcon, AppIconName } from '../components/Icons';
 import { StateToggle, ToggleKind, TogglePhase } from '../components/StateToggle';
 import { VehiclePlan } from '../components/VehiclePlan';
 import { StateRow } from '../components/StateRow';
+import { VehicleStatusCard, StatusEntry, StatusTone } from '../components/VehicleStatusCard';
 import { Control } from './Control';
 import { Detail } from './Detail';
 import { PlaceResolver } from '../core/vehicle/PlaceResolver';
@@ -26,27 +27,6 @@ import { BackgroundReset } from '../core/app/BackgroundReset';
 
 /** 本文件的日志 Tag —— 过滤日志时按它筛。 */
 const TAG: string = 'Index';
-
-/**
- * 状态行的片段类型，决定该片段的排版层级。
- *
- * 状态行原本是一整条同色同号的文本，用户必须逐字读才知道哪段是
- * 「什么状态」、哪段是「具体数据」。拆成片段后按层级分别排版：
- *
- *   label —— 状态词。13fp Medium，唯一用主题蓝的片段，一眼扫到。
- *   data  —— 辅助数据（功率、电流、AQI 等）。11fp 三级灰，退到背景。
- *   key   —— 关键数值（剩余时长等）。13fp 等宽主色，与顶部总里程同一套语言。
- *   sep   —— 分隔符。11fp 三级灰，弱化不抢视线。
- */
-type StatusSegKind = 'label' | 'data' | 'key' | 'sep';
-
-/**
- * 状态行的一个片段。
- */
-interface StatusSegment {
-  text: string;
-  kind: StatusSegKind;
-}
 
 /**
  * 寻车按钮瞬时高亮的持续时长（毫秒）。
@@ -85,12 +65,11 @@ struct Index {
   /**
    * 车模下方信息区的固定高度（vp）。
    *
-   * 这一块有两种形态：两行静态信息（车型名 + 副文本）与一行状态行。
-   * 两者高度不同，按内容自适应的话，状态行出现 / 消失时整页会上下跳。
-   * 取两行形态的高度作为固定值（16fp 主标题 + 10fp 副标题 + 2vp 间距 ≈ 40vp，
-   * 留一点余量避免文字被裁），内容垂直居中，切换就看不出跳变。
+   * 这一块有两种形态：两行静态信息（车型名 + 副文本）与一张状态卡片。
+   * 两者高度不同，按内容自适应的话，状态卡片出现 / 消失时整页会上下跳。
+   * 取状态卡片的高度（44vp）作为固定值，内容垂直居中，切换就看不出跳变。
    */
-  private static readonly STATUS_AREA_HEIGHT: number = 42;
+  private static readonly STATUS_AREA_HEIGHT: number = 44;
 
   /**
    * 充电中轮询电池状态的周期（毫秒）。
@@ -495,6 +474,14 @@ struct Index {
   @State currentTab: number = 0;
 
   /**
+   * 页面当前是否可见。
+   *
+   * 状态卡片的轮播只在页面可见时跑 —— 切到后台还在轮播是白费电，
+   * 回到前台看到的内容也对不上当时的状态。
+   */
+  @State pageActive: boolean = true;
+
+  /**
    * Tab 内容的滑动控制器。
    *
    * 三个 Tab 放进同一个 Swiper —— 左右拖动即可切换，
@@ -707,6 +694,7 @@ struct Index {
    * 页面隐藏时停止文案定时器（切到后台不再更新）。
    */
   onPageHide(): void {
+    this.pageActive = false;
     this.stopTextTimer();
     this.stopChargeTimer();
     this.stopLocationTimer();
@@ -1244,6 +1232,7 @@ struct Index {
    * 但**状态刷新**按需触发：距上次刷新不足阈值就不打扰用户。
    */
   onPageShow(): void {
+    this.pageActive = true;
     // 概览 / 控制 / 详情是同一个页面里的 Swiper Tab —— 不是独立的 page，
     // 不涉及页面切换，但要处理「切回概览 Tab」。
     // 栈里每个页面切回前台时都会触发 onPageShow，Index 在栈底会先触发，
@@ -2432,16 +2421,6 @@ struct Index {
   }
 
   /**
-   * 充电电流文案。
-   */
-  private currentText(): string {
-    if (this.currentAmps <= 0) {
-      return '';
-    }
-    return `${Math.round(this.currentAmps)} A`;
-  }
-
-  /**
    * 充满剩余时长文案。
    */
   private remainingTimeText(): string {
@@ -2472,171 +2451,123 @@ struct Index {
     return '极星2';
   }
 
-  // ---------- 车模下方状态行 ----------
+  // ---------- 车模下方状态卡片 ----------
 
   /**
-   * 状态行的级别，决定配色。
+   * 当前所有车辆状态。
    *
-   * 0 = 无状态（回落车型副文本）
-   * 1 = 正常运行中（充电 / 露营 / 空调 / 净化）—— 品牌蓝
-   * 2 = 需要关注（充电故障）—— 错误色
-   * 3 = 车辆异常（健康告警）—— 警示色
+   * 各来源互相独立，不再互斥 —— 充电中同时开着驻车空调，
+   * 两条都要出现在列表里，由状态卡片轮播显示。
    */
-  private statusLevel(): number {
-    // 异常优先级最高 —— 异常需要用户立即处理，不能被充电信息盖住。
+  private statusEntries(): StatusEntry[] {
+    const entries: StatusEntry[] = [];
+
+    // 车辆健康告警：优先级最高，但依然只是列表中的一条。
     if (this.healthWarnings.length > 0) {
-      return 3;
+      const first = this.healthWarnings[0];
+      entries.push({
+        tone: StatusTone.WARN,
+        title: first,
+        detail: this.healthDetailText()
+      });
     }
+
+    // 充电状态
     const stage = this.chargeStage();
     if (stage === ChargeStage.FAULT) {
-      return 2;
+      entries.push({
+        tone: StatusTone.ERROR,
+        title: this.chargerConnection === '连接故障' ? '充电连接故障' : '充电错误',
+        detail: ''
+      });
+    } else if (stage === ChargeStage.COMPLETED) {
+      entries.push({ tone: StatusTone.OK, title: '充电完成', detail: '' });
+    } else if (stage === ChargeStage.PAUSED) {
+      entries.push({ tone: StatusTone.NORMAL, title: '充电已暂停', detail: '' });
+    } else if (stage === ChargeStage.PLUGGED) {
+      entries.push({ tone: StatusTone.NORMAL, title: '充电枪已连接', detail: '' });
+    } else if (stage === ChargeStage.CHARGING) {
+      entries.push({
+        tone: StatusTone.NORMAL,
+        title: '充电中',
+        detail: this.chargeDetailText()
+      });
     }
-    if (stage !== ChargeStage.IDLE && stage !== ChargeStage.DISCHARGING) {
-      return 1;
+
+    // 会话中功能：露营模式与驻车空调本质是同一件事，合并成一条。
+    if (this.campRunning()) {
+      entries.push({
+        tone: StatusTone.NORMAL,
+        title: '露营模式已开启',
+        detail: this.remainingDetail(this.campRemainingMinutes)
+      });
+    } else if (this.climateRunning()) {
+      entries.push({
+        tone: StatusTone.NORMAL,
+        title: '驻车空调运行中',
+        detail: this.remainingDetail(this.climateCountdownMinutes)
+      });
     }
-    if (this.sessionSegments().length > 0) {
-      return 1;
+
+    if (this.airRunning()) {
+      entries.push({
+        tone: StatusTone.NORMAL,
+        title: '空气净化运行中',
+        detail: this.airDetailText()
+      });
     }
-    return 0;
+
+    return entries;
   }
 
   /**
-   * 状态行片段。
-   *
-   * 空数组表示没有需要显示的状态 —— 此时回落到车型副文本。
+   * 充电中的辅助数据：剩余时间 + 功率。
    */
-  private statusSegments(): StatusSegment[] {
-    const level = this.statusLevel();
-    if (level === 3) {
-      return this.healthSegments();
-    }
-    if (level === 2) {
-      return [{
-        text: this.chargerConnection === '连接故障' ? '充电连接故障' : '充电错误',
-        kind: 'label'
-      }];
-    }
-    if (level === 1) {
-      const stage = this.chargeStage();
-      if (stage !== ChargeStage.IDLE && stage !== ChargeStage.DISCHARGING) {
-        return this.chargeSegments();
-      }
-      return this.sessionSegments();
-    }
-    return [];
-  }
-
-  /**
-   * 拼接片段，中间插入分隔符。
-   *
-   * 分隔符本身也是一个片段（kind = sep），这样它能跟其它片段一样
-   * 被 Row 依次渲染，不必在布局里做特殊判断。
-   */
-  private joinSegments(parts: StatusSegment[]): StatusSegment[] {
-    const result: StatusSegment[] = [];
-    for (const part of parts) {
-      if (part.text.length === 0) {
-        continue;
-      }
-      if (result.length > 0) {
-        result.push({ text: '·', kind: 'sep' });
-      }
-      result.push(part);
-    }
-    return result;
-  }
-
-  /**
-   * 充电状态的片段。
-   *
-   * 充电中给完整的功率 / 电流 / 剩余时间，
-   * 其余阶段给一句话概括。
-   */
-  private chargeSegments(): StatusSegment[] {
-    const stage = this.chargeStage();
-    if (stage === ChargeStage.COMPLETED) {
-      return [{ text: '充电已完成', kind: 'label' }];
-    }
-    if (stage === ChargeStage.PAUSED) {
-      return [{ text: '充电已暂停', kind: 'label' }];
-    }
-    if (stage === ChargeStage.PLUGGED) {
-      return [{ text: '充电枪已连接', kind: 'label' }];
-    }
-    // 充电中：功率 · 电流 · 充满剩余时间
-    const parts: StatusSegment[] = [{ text: '充电中', kind: 'label' }];
-    const power = this.powerText();
-    if (power.length > 0) {
-      parts.push({ text: power, kind: 'data' });
-    }
-    const current = this.currentText();
-    if (current.length > 0) {
-      parts.push({ text: current, kind: 'data' });
-    }
+  private chargeDetailText(): string {
+    const parts: string[] = [];
     const remaining = this.remainingTimeText();
     if (remaining.length > 0) {
-      parts.push({ text: '剩余', kind: 'data' });
-      parts.push({ text: remaining, kind: 'key' });
+      parts.push(`剩余 ${remaining}`);
     }
-    return this.joinSegments(parts);
+    const power = this.powerText();
+    if (power.length > 0) {
+      parts.push(power);
+    }
+    return parts.join(' · ');
   }
 
   /**
-   * 会话中功能的状态片段。
-   *
-   * 露营模式与驻车空调本质是同一件事 —— 露营模式开着时空调必然在跑，
-   * 所以两者合并成一条，露营模式优先（它多了倒计时信息）。
-   * 空调与空气净化互斥，不会同时出现。
-   *
-   * 关闭过程中文案保持不变 —— 空调 / 净化实际还在跑，
-   * 倒计时也还在走。换成「正在关闭…」反而多了一条要读的信息，
-   * 而且车端确认之后这一行整体消失，观感上不如一直显示原内容自然。
-   * 关闭完成后这一行回落车型名与副文本。
+   * 倒计时的辅助数据文案。
    */
-  private sessionSegments(): StatusSegment[] {
-    if (this.campRunning()) {
-      const parts: StatusSegment[] = [{ text: '露营模式已开启', kind: 'label' }];
-      const remaining = this.campRemainingMinutes;
-      if (remaining > 0) {
-        parts.push({ text: '剩余', kind: 'data' });
-        parts.push({ text: this.campDurationText(remaining), kind: 'key' });
-      }
-      return this.joinSegments(parts);
+  private remainingDetail(minutes: number): string {
+    if (minutes <= 0) {
+      return '';
     }
-    if (this.climateRunning()) {
-      const parts: StatusSegment[] = [{ text: '驻车空调运行中', kind: 'label' }];
-      const remaining = this.climateCountdownMinutes;
-      if (remaining > 0) {
-        parts.push({ text: '剩余', kind: 'data' });
-        parts.push({ text: this.campDurationText(remaining), kind: 'key' });
-      }
-      return this.joinSegments(parts);
+    return `剩余 ${this.campDurationText(minutes)}`;
+  }
+
+  /**
+   * 空气净化的辅助数据：剩余时间 + AQI + PM2.5。
+   */
+  private airDetailText(): string {
+    const parts: string[] = [];
+    if (this.airCountdownMinutes > 0) {
+      parts.push(`剩余 ${this.campDurationText(this.airCountdownMinutes)}`);
     }
-    if (this.airRunning()) {
-      const parts: StatusSegment[] = [{ text: '空气净化运行中', kind: 'label' }];
-      const remaining = this.airCountdownMinutes;
-      if (remaining > 0) {
-        parts.push({ text: '剩余', kind: 'data' });
-        parts.push({ text: this.campDurationText(remaining), kind: 'key' });
-      }
-      if (this.airQualityIndex >= 0) {
-        parts.push({ text: 'AQI', kind: 'data' });
-        parts.push({ text: `${this.airQualityIndex}`, kind: 'key' });
-      }
-      if (this.pm25UgM3 >= 0) {
-        parts.push({ text: 'PM2.5', kind: 'data' });
-        parts.push({ text: `${Math.round(this.pm25UgM3)}`, kind: 'key' });
-      }
-      return this.joinSegments(parts);
+    if (this.airQualityIndex >= 0) {
+      parts.push(`AQI ${this.airQualityIndex}`);
     }
-    return [];
+    if (this.pm25UgM3 >= 0) {
+      parts.push(`PM2.5 ${Math.round(this.pm25UgM3)}`);
+    }
+    return parts.join(' · ');
   }
 
   /**
    * 露营模式是否处于「运行中（含正在关闭）」。
    *
    * 关闭过程中露营模式依然成立 —— 空调还在跑，倒计时还在走，
-   * 状态行要保持显示原内容，直到车端确认关闭。
+   * 状态卡片要保持显示原内容，直到车端确认关闭。
    */
   private campRunning(): boolean {
     return this.campPhase === TogglePhase.ON || this.campClosing;
@@ -2669,46 +2600,14 @@ struct Index {
   }
 
   /**
-   * 健康告警的片段。
+   * 健康告警的摘要文案。
    *
    * 只显示第一条 + 其余项计数 —— 平铺会让这一行变成一堵墙，
    * 用户反而看不出重点。告警列表已按安全性排序，第一条即最需要处理的。
    */
-  private healthSegments(): StatusSegment[] {
-    if (this.healthWarnings.length === 0) {
-      return [];
-    }
-    const first = this.healthWarnings[0];
+  private healthDetailText(): string {
     const rest = this.healthWarnings.length - 1;
-    const parts: StatusSegment[] = [{ text: first, kind: 'label' }];
-    if (rest > 0) {
-      parts.push({ text: `另有 ${rest} 项异常`, kind: 'data' });
-    }
-    return this.joinSegments(parts);
-  }
-
-  /**
-   * 状态词的颜色。
-   */
-  private statusLabelColor(): ResourceColor {
-    const level = this.statusLevel();
-    if (level === 3) {
-      return $r('app.color.app_warn');
-    }
-    if (level === 2) {
-      return $r('app.color.app_error');
-    }
-    if (level === 1) {
-      return $r('app.color.app_accent_text');
-    }
-    return $r('app.color.app_tertiary_text');
-  }
-
-  /**
-   * 是否需要显示异常前置图标。
-   */
-  private statusShowWarningIcon(): boolean {
-    return this.statusLevel() === 3;
+    return rest > 0 ? `另有 ${rest} 项异常` : '';
   }
 
   /**
@@ -4853,50 +4752,6 @@ struct Index {
   }
 
   /**
-   * 渲染状态行的各个片段。
-   *
-   * 用 Text + Span 而不是 Row 拼多个 Text —— Span 是 Text 内的富文本片段，
-   * 排版与截断都交给 Text 自己处理（超长时按 maxLines + 省略号收尾），
-   * 用 Row 拼的话溢出时会从两侧被切掉。
-   *
-   * 每个片段按 kind 走不同的排版层级：
-   *   label —— 状态词。15fp Medium，主题蓝 / 警示色 / 错误色，一眼扫到。
-   *   data  —— 辅助数据。13fp 等宽三级灰，退到背景不抢注意力。
-   *   key   —— 关键数值。15fp 等宽主色，与顶部「总里程」同一套语言。
-   *   sep   —— 分隔符。13fp 三级灰，左右各留 5vp。
-   */
-  @Builder
-  StatusSegments() {
-    Text() {
-      ForEach(this.statusSegments(), (segment: StatusSegment) => {
-        Span(segment.text)
-          .fontSize(segment.kind === 'label' || segment.kind === 'key' ? 15 : 13)
-          .fontWeight(segment.kind === 'label' ? FontWeight.Medium : FontWeight.Normal)
-          .fontFamily(segment.kind === 'label' ? '' : 'HarmonyOS Sans Mono')
-          .fontColor(this.segmentColor(segment))
-          .margin(segment.kind === 'sep' ? { left: 5, right: 5 } : { left: 0, right: 0 })
-      })
-    }
-    .maxLines(1)
-    .textOverflow({ overflow: TextOverflow.Ellipsis })
-    .width('100%')
-    .textAlign(TextAlign.Center)
-  }
-
-  /**
-   * 片段颜色。
-   */
-  private segmentColor(segment: StatusSegment): ResourceColor {
-    if (segment.kind === 'label') {
-      return this.statusLabelColor();
-    }
-    if (segment.kind === 'key') {
-      return $r('app.color.app_primary_text');
-    }
-    return $r('app.color.app_tertiary_text');
-  }
-
-  /**
    * 分节标签：标题 + 尾部发丝线（Nordic Instrument 的分节方式）。
    */
   @Builder
@@ -5089,15 +4944,15 @@ struct Index {
             .justifyContent(FlexAlign.Center)
             .margin({ top: 16 })
 
-            // ---------- 车型信息 / 状态行 ----------
-            // 有重要信息时，车型名与副文本整体让位给状态行 ——
-            // 静态信息在异常或充电时是干扰，状态行才是用户此刻要看的。
+            // ---------- 车型信息 / 状态卡片 ----------
+            // 有状态时，车型名与副文本整体让位给状态卡片 ——
+            // 静态信息在异常或充电时是干扰，状态才是用户此刻要看的。
             //
-            // 容器高度固定：两行文字与一行状态行的高度不同，
+            // 容器高度固定：两行文字与一张卡片的高度不同，
             // 若按内容自适应，切换时整页会上下跳一下。
             // 固定高度 + 内容垂直居中，切换就看不出来了。
             Column() {
-              if (this.statusSegments().length === 0) {
+              if (this.statusEntries().length === 0) {
                 Column({ space: 2 }) {
                   Text(this.modelName)
                     .fontSize(16)
@@ -5110,23 +4965,11 @@ struct Index {
                 .width('100%')
                 .alignItems(HorizontalAlign.Center)
               } else {
-                // 异常态前置警示图标：不用底色胶囊，警示色文字 + 图标即可跳出来
-                if (this.statusShowWarningIcon()) {
-                  Row({ space: 5 }) {
-                    AppIcon({
-                      name: AppIconName.WARNING,
-                      iconSize: 16,
-                      color: $r('app.color.app_warn')
-                    })
-                    .width(16)
-                    .height(16)
-
-                    this.StatusSegments()
-                  }
-                  .alignItems(VerticalAlign.Center)
-                } else {
-                  this.StatusSegments()
-                }
+                VehicleStatusCard({
+                  entries: this.statusEntries(),
+                  active: this.pageActive
+                })
+                .width('100%')
               }
             }
             .width('100%')
