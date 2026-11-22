@@ -2512,7 +2512,7 @@ struct Index {
     if (this.airRunning()) {
       entries.push({
         tone: StatusTone.NORMAL,
-        title: '空气净化运行中',
+        title: '净化中',
         detail: this.airDetailText()
       });
     }
