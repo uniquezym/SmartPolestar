@@ -198,6 +198,8 @@ export struct VehicleStatusCard {
     // ---------- 卡片主体 ----------
     Row({ space: 12 }) {
       // 徽章：数字 = 当前这条的序号（第几条）
+      // 与文案共用同一套淡出淡入 —— 数字若先于文案跳变，
+      // 会出现「新序号配旧文案」的错位。
       Text(`${this.safeIndex() + 1}`)
         .fontSize(12)
         .fontWeight(FontWeight.Bold)
@@ -207,6 +209,9 @@ export struct VehicleStatusCard {
         .textAlign(TextAlign.Center)
         .backgroundColor(this.badgeColor())
         .borderRadius(11)
+        .opacity(this.visible)
+        .translate({ x: 0, y: (1 - this.visible) * SLIDE_DISTANCE })
+        .animation({ duration: FADE_DURATION_MS, curve: Curve.EaseOut })
 
       // 状态文案：整条内容一起淡出淡入
       Row({ space: 8 }) {
