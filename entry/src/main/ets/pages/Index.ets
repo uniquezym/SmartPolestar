@@ -2533,7 +2533,7 @@ struct Index {
       });
     }
 
-    // 会话中功能：露营模式与驻车空调本质是同一件事，合并成一条。
+    // 会话中功能：露营模式与驻车空调分成两条，各自独立判断。
     if (this.campRunning()) {
       entries.push({
         tone: StatusTone.NORMAL,
@@ -2541,12 +2541,15 @@ struct Index {
         detail: this.remainingDetail(this.campRemainingMinutes),
         kind: StatusKind.CAMP
       });
-    } else if (this.climateRunning()) {
+    }
+
+    // 驻车空调没有对应的控制卡片，暂不提供下钻入口。
+    if (this.climateRunning()) {
       entries.push({
         tone: StatusTone.NORMAL,
         title: '驻车空调运行中',
         detail: this.remainingDetail(this.climateCountdownMinutes),
-        kind: StatusKind.CAMP
+        kind: StatusKind.NONE
       });
     }
 
@@ -2698,7 +2701,7 @@ struct Index {
       case StatusKind.CHARGE:
         return this.chargeSheetTitle();
       case StatusKind.CAMP:
-        return { title: this.campRunning() ? '露营模式' : '驻车空调' };
+        return { title: '露营模式' };
       case StatusKind.AIR:
         return { title: '空气净化' };
       default:
