@@ -290,24 +290,31 @@ export struct VehicleStatusCard {
       .translate({ x: 0, y: (1 - this.visible) * SLIDE_DISTANCE })
       .animation({ duration: FADE_DURATION_MS, curve: Curve.EaseOut })
 
-      // 下钻箭头：主题色（品牌深蓝），与页面其它强调元素一致
-      AppIcon({
-        name: AppIconName.ARROW_UP_RIGHT,
-        iconSize: 16,
-        color: $r('app.color.app_accent')
-      })
+      // 下钻箭头：主题色（品牌深蓝），与页面其它强调元素一致。
+      // 图标本身只有 16vp，直接用它做热区太难点中 ——
+      // 外层套一个更大的透明容器，把点击热区撑到 40vp。
+      Stack() {
+        AppIcon({
+          name: AppIconName.ARROW_UP_RIGHT,
+          iconSize: 16,
+          color: $r('app.color.app_accent')
+        })
         .width(16)
         .height(16)
         .opacity(this.arrowEnabled ? 1 : 0.3)
-        .onClick(() => {
-          if (this.arrowEnabled && this.onArrowTap !== undefined) {
-            this.onArrowTap();
-          }
-        })
+      }
+      .width(40)
+      .height(40)
+      .alignContent(Alignment.Center)
+      .onClick(() => {
+        if (this.arrowEnabled && this.onArrowTap !== undefined) {
+          this.onArrowTap();
+        }
+      })
     }
     .width('100%')
     .height(44)
-    .padding({ left: 12, right: 12 })
+    .padding({ left: 12, right: 2 })
     .backgroundColor($r('app.color.app_surface'))
     .borderRadius(8)
     .border({ width: 1, color: $r('app.color.app_card_border') })
