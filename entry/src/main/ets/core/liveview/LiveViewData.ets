@@ -30,15 +30,12 @@ export class LiveViewData {
    *
    * 只能用官方白名单里的场景值，否则会被判为不合规场景。
    *
-   * 选 RENT（共享租赁）而不是 TIMER（计时）：
-   *   官方对 TIMER 的适用范围写得很窄 ——
-   *   「适用于专注时刻、番茄时钟，仅限工具类应用申请」，
-   *   不适用案例里直接列了取餐计时提醒、课程提醒、正计时等。
-   *   空气净化是车机设备运行，不是专注时钟，不符合 TIMER 的准入。
-   *   RENT 的适用范围里明确包含「汽车快充充电」——
-   *   车载设备按时长运行、用户主动开启、需要看剩余时长，正是这个形态。
+   * 选 TIMER（计时）：
+   *   空气净化是按时长运行的设备服务 —— 用户主动开启、有开始时间、
+   *   有截止时间、有倒计时，形态与「计时」一致。
+   *   申请时在 AppGallery Connect 的实况窗服务权益里选计时场景。
    */
-  static readonly EVENT_NAME: string = 'RENT';
+  static readonly EVENT_NAME: string = 'TIMER';
 
   /** 卡片标题。带上「中」字表达运行态 —— 辅助区被停止按钮占用了，状态词得放这里。 */
   static readonly TITLE: string = '空气净化中';
