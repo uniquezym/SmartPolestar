@@ -2545,7 +2545,9 @@ struct Index {
     }
 
     // 驻车空调没有对应的控制卡片，暂不提供下钻入口。
-    if (this.climateRunning()) {
+    // 露营模式开启期间不显示 —— 露营本身就是靠驻车空调实现的，
+    // 两条同时出现是同件事被说了两遍。
+    if (this.climateRunning() && !this.campRunning()) {
       entries.push({
         tone: StatusTone.NORMAL,
         title: '驻车空调运行中',
