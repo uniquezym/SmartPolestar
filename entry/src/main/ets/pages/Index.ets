@@ -10,8 +10,10 @@ import { AppIcon, AppIconName } from '../components/Icons';
 import { StateToggle, ToggleKind, TogglePhase } from '../components/StateToggle';
 import { VehiclePlan } from '../components/VehiclePlan';
 import { StateRow } from '../components/StateRow';
-import { VehicleStatusCard, StatusEntry, StatusTone } from '../components/VehicleStatusCard';
+import { VehicleStatusCard, StatusEntry, StatusTone, StatusKind } from '../components/VehicleStatusCard';
 import { ChargeConfigCard } from '../components/ChargeConfigCard';
+import { CampModeCard } from '../components/CampModeCard';
+import { AirPurifyCard } from '../components/AirPurifyCard';
 import { Control } from './Control';
 import { Detail } from './Detail';
 import { PlaceResolver } from '../core/vehicle/PlaceResolver';
@@ -491,11 +493,16 @@ struct Index {
   @State pageActive: boolean = true;
 
   /**
-   * 充电状态卡片半模态是否打开。
+   * 状态卡片半模态是否打开。
    *
-   * 状态卡片右侧箭头点开 —— 充电枪连接时弹充电卡片。
+   * 状态卡片右侧箭头点开 —— 按当前状态类别弹出对应的卡片。
    */
-  @State chargeSheetOpen: boolean = false;
+  @State statusSheetOpen: boolean = false;
+
+  /**
+   * 半模态要展示哪一类内容。
+   */
+  @State statusSheetKind: StatusKind = StatusKind.NONE;
 
   /**
    * 状态卡片当前显示第几条。
@@ -2492,7 +2499,8 @@ struct Index {
       entries.push({
         tone: StatusTone.WARN,
         title: first,
-        detail: this.healthDetailText()
+        detail: this.healthDetailText(),
+        kind: StatusKind.NONE
       });
     }
 
@@ -2502,19 +2510,26 @@ struct Index {
       entries.push({
         tone: StatusTone.ERROR,
         title: this.chargerConnection === '连接故障' ? '充电连接故障' : '充电错误',
-        detail: ''
+        detail: '',
+        kind: StatusKind.CHARGE
       });
     } else if (stage === ChargeStage.COMPLETED) {
-      entries.push({ tone: StatusTone.OK, title: '充电完成', detail: '' });
+      entries.push({ tone: StatusTone.OK, title: '充电完成', detail: '', kind: StatusKind.CHARGE });
     } else if (stage === ChargeStage.PAUSED) {
-      entries.push({ tone: StatusTone.NORMAL, title: '充电已暂停', detail: '' });
+      entries.push({ tone: StatusTone.NORMAL, title: '充电已暂停', detail: '', kind: StatusKind.CHARGE });
     } else if (stage === ChargeStage.PLUGGED) {
-      entries.push({ tone: StatusTone.NORMAL, title: '充电枪已连接', detail: '' });
+      entries.push({
+        tone: StatusTone.NORMAL,
+        title: '充电枪已连接',
+        detail: '',
+        kind: StatusKind.CHARGE
+      });
     } else if (stage === ChargeStage.CHARGING) {
       entries.push({
         tone: StatusTone.NORMAL,
         title: '充电中',
-        detail: this.chargeDetailText()
+        detail: this.chargeDetailText(),
+        kind: StatusKind.CHARGE
       });
     }
 
@@ -2523,13 +2538,15 @@ struct Index {
       entries.push({
         tone: StatusTone.NORMAL,
         title: '露营模式已开启',
-        detail: this.remainingDetail(this.campRemainingMinutes)
+        detail: this.remainingDetail(this.campRemainingMinutes),
+        kind: StatusKind.CAMP
       });
     } else if (this.climateRunning()) {
       entries.push({
         tone: StatusTone.NORMAL,
         title: '驻车空调运行中',
-        detail: this.remainingDetail(this.climateCountdownMinutes)
+        detail: this.remainingDetail(this.climateCountdownMinutes),
+        kind: StatusKind.CAMP
       });
     }
 
@@ -2537,7 +2554,8 @@ struct Index {
       entries.push({
         tone: StatusTone.NORMAL,
         title: '净化中',
-        detail: this.airDetailText()
+        detail: this.airDetailText(),
+        kind: StatusKind.AIR
       });
     }
 
@@ -2624,24 +2642,37 @@ struct Index {
   }
 
   /**
-   * 当前显示的状态是否与充电有关。
+   * 当前显示的状态类别。
    *
-   * 只有充电相关的那条才给下钻入口 —— 目前只有充电枪连接时
-   * 才弹出充电卡片，其他状态点了没反应。
+   * 决定箭头点开时弹出哪张卡片 —— 没有可下钻内容时返回 NONE。
    */
-  private currentStatusIsCharge(): boolean {
+  private currentStatusKind(): StatusKind {
     const entries = this.statusEntries();
     if (entries.length === 0) {
-      return false;
+      return StatusKind.NONE;
     }
     const index = this.statusCurrentIndex >= entries.length ? 0 : this.statusCurrentIndex;
-    return entries[index].title.indexOf('充电') >= 0;
+    const kind = entries[index].kind;
+    return kind === undefined ? StatusKind.NONE : kind;
+  }
+
+  /**
+   * 当前显示的状态能不能下钻。
+   */
+  private currentStatusDrillable(): boolean {
+    const kind = this.currentStatusKind();
+    if (kind === StatusKind.NONE) {
+      return false;
+    }
+    // 充电卡片只在插了枪的时候才有意义 —— 没插枪时没什么可看的。
+    if (kind === StatusKind.CHARGE) {
+      return this.chargerPlugged();
+    }
+    return true;
   }
 
   /**
    * 充电枪是否已连接。
-   *
-   * 充电卡片只在插了枪的时候才有意义 —— 没插枪时没什么可看的。
    */
   private chargerPlugged(): boolean {
     const stage = this.chargeStage();
@@ -2649,13 +2680,30 @@ struct Index {
   }
 
   /**
-   * 打开充电卡片半模态。
+   * 打开状态卡片对应的半模态。
    */
-  private openChargeSheet(): void {
-    if (!this.currentStatusIsCharge() || !this.chargerPlugged()) {
+  private openStatusSheet(): void {
+    if (!this.currentStatusDrillable()) {
       return;
     }
-    this.chargeSheetOpen = true;
+    this.statusSheetKind = this.currentStatusKind();
+    this.statusSheetOpen = true;
+  }
+
+  /**
+   * 半模态标题。
+   */
+  private statusSheetTitle(): SheetTitleOptions {
+    switch (this.statusSheetKind) {
+      case StatusKind.CHARGE:
+        return this.chargeSheetTitle();
+      case StatusKind.CAMP:
+        return { title: this.campRunning() ? '露营模式' : '驻车空调' };
+      case StatusKind.AIR:
+        return { title: '空气净化' };
+      default:
+        return { title: '' };
+    }
   }
 
   /**
@@ -5047,9 +5095,9 @@ struct Index {
                 VehicleStatusCard({
                   entries: this.statusEntries(),
                   active: this.pageActive,
-                  arrowEnabled: this.currentStatusIsCharge() && this.chargerPlugged(),
+                  arrowEnabled: this.currentStatusDrillable(),
                   onArrowTap: () => {
-                    this.openChargeSheet();
+                    this.openStatusSheet();
                   },
                   onCurrentChange: (index: number) => {
                     this.statusCurrentIndex = index;
@@ -5269,65 +5317,94 @@ struct Index {
     .width('100%')
     .height('100%')
     .backgroundColor($r('app.color.app_background'))
-    // ---------- 充电卡片半模态 ----------
+    // ---------- 状态卡片半模态 ----------
     // 挂在根节点上：弹起时概览页变暗但不销毁，关闭后回到原位置。
-    .bindSheet(this.chargeSheetOpen, this.chargeSheetBuilder(), {
+    .bindSheet(this.statusSheetOpen, this.statusSheetBuilder(), {
       height: SheetSize.FIT_CONTENT,
       dragBar: true,
       showClose: true,
       maskColor: $r('app.color.app_scrim'),
       backgroundColor: $r('app.color.app_background'),
-      title: this.chargeSheetTitle(),
+      title: this.statusSheetTitle(),
       onDisappear: () => {
-        this.chargeSheetOpen = false;
+        this.statusSheetOpen = false;
       }
     })
   }
 
   /**
-   * 充电卡片半模态的内容。
+   * 状态卡片半模态的内容。
    *
-   * 用的是控制页里的那张充电配置卡（ChargeConfigCard）——
-   * 同一份组件、同一份状态，面板里改上限保存，
-   * 控制页里的那张也跟着变。
+   * 按当前状态类别展示对应的卡片 —— 都是控制页里那几张，
+   * 同一份组件、同一份状态，面板里操作后控制页里那张也跟着变。
    *
    * 布局与控制页保持一致：Scroll → Column（左右 18vp 内边距）→ 卡片。
    * 卡片自身还有 16vp 内边距，两层叠加后文字的起始位置与控制页相同。
    */
   @Builder
-  private chargeSheetBuilder() {
+  private statusSheetBuilder() {
     Scroll() {
       Column() {
-        ChargeConfigCard({
-          battery: this.batteryLevel,
-          targetSoc: this.draftChargeSoc,
-          ampLimit: this.draftChargeAmp,
-          timerActivated: this.draftChargeTimerOn,
-          timerStartMinutes: this.draftChargeStartMinutes,
-          timerStopMinutes: this.draftChargeStopMinutes,
-          saving: this.chargeSaving,
-          // 已生效值：用来判断编辑值与车端是否一致，决定保存按钮是否可用
-          savedTargetSoc: this.chargeTargetSoc,
-          savedAmpLimit: this.chargeAmpLimit,
-          savedTimerActivated: this.chargeTimerActivated,
-          savedTimerStartMinutes: this.chargeTimerStartMinutes,
-          savedTimerStopMinutes: this.chargeTimerStopMinutes,
-          onTargetSocChange: (percent: number) => {
-            this.changeChargeTargetSoc(percent);
-          },
-          onAmpLimitChange: (amps: number) => {
-            this.changeChargeAmpLimit(amps);
-          },
-          onTimerToggle: (activated: boolean) => {
-            this.changeChargeTimerToggle(activated);
-          },
-          onTimerChange: (startMinutes: number, stopMinutes: number) => {
-            this.changeChargeTimer(startMinutes, stopMinutes);
-          },
-          onSave: () => {
-            this.saveChargeConfig();
-          }
-        })
+        if (this.statusSheetKind === StatusKind.CHARGE) {
+          ChargeConfigCard({
+            battery: this.batteryLevel,
+            targetSoc: this.draftChargeSoc,
+            ampLimit: this.draftChargeAmp,
+            timerActivated: this.draftChargeTimerOn,
+            timerStartMinutes: this.draftChargeStartMinutes,
+            timerStopMinutes: this.draftChargeStopMinutes,
+            saving: this.chargeSaving,
+            // 已生效值：用来判断编辑值与车端是否一致，决定保存按钮是否可用
+            savedTargetSoc: this.chargeTargetSoc,
+            savedAmpLimit: this.chargeAmpLimit,
+            savedTimerActivated: this.chargeTimerActivated,
+            savedTimerStartMinutes: this.chargeTimerStartMinutes,
+            savedTimerStopMinutes: this.chargeTimerStopMinutes,
+            onTargetSocChange: (percent: number) => {
+              this.changeChargeTargetSoc(percent);
+            },
+            onAmpLimitChange: (amps: number) => {
+              this.changeChargeAmpLimit(amps);
+            },
+            onTimerToggle: (activated: boolean) => {
+              this.changeChargeTimerToggle(activated);
+            },
+            onTimerChange: (startMinutes: number, stopMinutes: number) => {
+              this.changeChargeTimer(startMinutes, stopMinutes);
+            },
+            onSave: () => {
+              this.saveChargeConfig();
+            }
+          })
+        } else if (this.statusSheetKind === StatusKind.CAMP) {
+          CampModeCard({
+            phase: this.campPhase,
+            durationMinutes: this.campDurationMinutes,
+            remainingMinutes: this.campRemainingMinutes,
+            remainingRatio: this.campRemainingRatio,
+            celsius: this.campCelsius,
+            onToggle: () => {
+              this.toggleCamp();
+            },
+            onDurationChange: (minutes: number) => {
+              this.changeCampDuration(minutes);
+            },
+            onTemperatureChange: (celsius: number) => {
+              this.changeCampTemperature(celsius);
+            }
+          })
+        } else if (this.statusSheetKind === StatusKind.AIR) {
+          AirPurifyCard({
+            phase: this.airPhase,
+            aqi: this.airQualityIndex,
+            pm25: this.pm25UgM3,
+            // 空调与净化互斥：驻车空调在跑时净化开关置灰
+            disabled: this.climateActive(),
+            onToggle: () => {
+              this.toggle(ToggleKind.PURIFIER);
+            }
+          })
+        }
       }
       .width('100%')
       .padding({ left: 18, right: 18, top: 4, bottom: 16 })
@@ -5339,3 +5416,7 @@ struct Index {
     .align(Alignment.Top)
   }
 }
+
+  /**
+   * 充电卡片的标题文案。
+   */

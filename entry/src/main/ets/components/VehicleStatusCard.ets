@@ -36,6 +36,23 @@ export enum StatusTone {
 }
 
 /**
+ * 状态的类别。
+ *
+ * 用来决定右侧箭头点开时弹出哪张卡片 —— 靠标题字符串匹配太脆弱，
+ * 加一条状态就要改一次判断。
+ */
+export enum StatusKind {
+  /** 无下钻内容。 */
+  NONE = 0,
+  /** 充电相关。 */
+  CHARGE = 1,
+  /** 露营模式 / 驻车空调。 */
+  CAMP = 2,
+  /** 空气净化。 */
+  AIR = 3
+}
+
+/**
  * 一条可轮播的车辆状态。
  */
 export interface StatusEntry {
@@ -45,6 +62,8 @@ export interface StatusEntry {
   title: string;
   /** 辅助数据（如「剩余 32 分」），空字符串则不显示。 */
   detail: string;
+  /** 状态类别，决定箭头点开后的内容。默认 NONE（不可下钻）。 */
+  kind?: StatusKind;
 }
 
 /**
