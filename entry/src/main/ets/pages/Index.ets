@@ -2698,40 +2698,23 @@ struct Index {
 
   /**
    * 半模态标题。
+   *
+   * 与卡片内部的标题保持一致 —— 面板里那张卡自己也有标题，
+   * 两处叫法不一样会让人以为是两个东西。
    */
   private statusSheetTitle(): SheetTitleOptions {
     switch (this.statusSheetKind) {
       case StatusKind.CHARGE:
-        return this.chargeSheetTitle();
+        return { title: '充电' };
       case StatusKind.CAMP:
         return { title: '露营模式' };
       case StatusKind.AIR:
         return { title: '空气净化' };
       case StatusKind.HEALTH:
-        return { title: '车辆健康' };
+        return { title: '健康与保养' };
       default:
         return { title: '' };
     }
-  }
-
-  /**
-   * 充电卡片的标题文案。
-   */
-  private chargeSheetTitle(): SheetTitleOptions {
-    const stage = this.chargeStage();
-    if (stage === ChargeStage.COMPLETED) {
-      return { title: '充电完成' };
-    }
-    if (stage === ChargeStage.PAUSED) {
-      return { title: '充电已暂停' };
-    }
-    if (stage === ChargeStage.PLUGGED) {
-      return { title: '充电枪已连接' };
-    }
-    if (stage === ChargeStage.FAULT) {
-      return { title: '充电异常' };
-    }
-    return { title: '充电中' };
   }
 
   /**
