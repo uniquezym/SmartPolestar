@@ -46,10 +46,12 @@ export enum StatusKind {
   NONE = 0,
   /** 充电相关。 */
   CHARGE = 1,
-  /** 露营模式 / 驻车空调。 */
+  /** 露营模式。 */
   CAMP = 2,
   /** 空气净化。 */
-  AIR = 3
+  AIR = 3,
+  /** 车辆健康告警。 */
+  HEALTH = 4
 }
 
 /**

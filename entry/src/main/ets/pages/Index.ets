@@ -14,6 +14,7 @@ import { VehicleStatusCard, StatusEntry, StatusTone, StatusKind } from '../compo
 import { ChargeConfigCard } from '../components/ChargeConfigCard';
 import { CampModeCard } from '../components/CampModeCard';
 import { AirPurifyCard } from '../components/AirPurifyCard';
+import { HealthCard } from '../components/HealthCard';
 import { Control } from './Control';
 import { Detail } from './Detail';
 import { PlaceResolver } from '../core/vehicle/PlaceResolver';
@@ -2500,7 +2501,7 @@ struct Index {
         tone: StatusTone.WARN,
         title: first,
         detail: this.healthDetailText(),
-        kind: StatusKind.NONE
+        kind: StatusKind.HEALTH
       });
     }
 
@@ -2704,6 +2705,8 @@ struct Index {
         return { title: '露营模式' };
       case StatusKind.AIR:
         return { title: '空气净化' };
+      case StatusKind.HEALTH:
+        return { title: '车辆健康' };
       default:
         return { title: '' };
     }
@@ -5406,6 +5409,21 @@ struct Index {
             onToggle: () => {
               this.toggle(ToggleKind.PURIFIER);
             }
+          })
+        } else if (this.statusSheetKind === StatusKind.HEALTH) {
+          HealthCard({
+            healthStatus: this.healthStatus,
+            maintenanceStatus: this.maintenanceStatus,
+            maintenanceCode: this.maintenanceCode,
+            serviceRemainingDays: this.serviceRemainingDays,
+            serviceRemainingKm: this.serviceRemainingKm,
+            brakeFluidWarning: this.brakeFluidWarning,
+            coolantWarning: this.coolantWarning,
+            washerFluidWarning: this.washerFluidWarning,
+            lowVoltageBatteryWarning: this.lowVoltageBatteryWarning,
+            tyreWarnings: this.tyreWarnings,
+            lightFaultCount: this.lightFaultCount,
+            lightFaultNames: this.lightFaultNames
           })
         }
       }
