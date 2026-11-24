@@ -19,11 +19,11 @@ const TAG: string = 'ControlCoordinator';
  * 应用停留在前台期间，车控直接下发，不再打断用户。
  */
 export class ControlCoordinator {
-  private context: common.UIAbilityContext;
+  private context: common.Context;
   private session: SessionState;
   private client: GrpcClient;
 
-  constructor(context: common.UIAbilityContext, session: SessionState, client: GrpcClient) {
+  constructor(context: common.Context, session: SessionState, client: GrpcClient) {
     this.context = context;
     this.session = session;
     this.client = client;

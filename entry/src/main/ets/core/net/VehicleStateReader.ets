@@ -1,6 +1,7 @@
 import { GrpcClient } from './grpc/GrpcClient';
 import { ChargeConfig } from './ChargeConfig';
 import { ProtoReader, ProtoValue } from '../proto/ProtoReader';
+import { VehicleVisual } from '../vehicle/VehicleVisual';
 import {
   VehicleState, CHARGING_LABELS, CHARGER_CONNECTION_LABELS, CHARGING_TYPE_LABELS,
   CHARGER_POWER_LABELS, CLIMATE_LABELS, CLIMATE_RUN_MODE_LABELS, LOCK_LABELS,
@@ -139,6 +140,9 @@ export class VehicleStateReader {
     // 机盖与充电口状态。还原自 ga0.m1406U：f1760J <- field 11，f1761K <- field 13。
     state.hoodState = ProtoValue.asInteger(ProtoValue.get(fields, 11)) ?? -1;
     state.chargePortState = ProtoValue.asInteger(ProtoValue.get(fields, 13)) ?? -1;
+    // 天窗（field 14）与报警状态（field 15）。
+    state.sunroofState = ProtoValue.asInteger(ProtoValue.get(fields, 14)) ?? -1;
+    state.alarmState = ProtoValue.asInteger(ProtoValue.get(fields, 15)) ?? -1;
 
     // 车门状态取 field 3..6，车窗状态取 field 7..10。
     // 还原自 ga0.m1406U：f1758H <- field 3..6，f1759I <- field 7..10。
@@ -293,6 +297,55 @@ export class VehicleStateReader {
     Log.info(TAG, `充电配置: 上限=${state.targetSoc}% 电流=${state.ampLimit}A ` +
       `预约=${state.chargeTimerStartMinutes}/${state.chargeTimerStopMinutes} ` +
       `启用=${state.chargeTimerActivated}`);
+  }
+
+  /**
+   * 读取车辆可用性状态。
+   *
+   * 这不是「车端能不能连上」的技术层状态，而是官方定义的业务语义：
+   *   可用状态   可用 / 不可用
+   *   不可用原因 无网络 / 省电模式 / 车辆使用中 / OTA 安装中 / 盗抢追踪中 / 服务模式
+   *   使用模式   未激活 / 便利 / 已激活 / 行驶中 …
+   *
+   * 官方 proto：services.vehiclestates.availability.AvailabilityService。
+   */
+  static async readAvailability(client: GrpcClient, vin: string, state: VehicleState): Promise<void> {
+    const response = await client.callStatus(
+      GrpcClient.SERVICE_AVAILABILITY, 'GetLatestAvailability', vin);
+    VehicleStateReader.applyAvailability(response, state);
+  }
+
+  /**
+   * 把可用性响应映射到状态对象。
+   */
+  static applyAvailability(response: Uint8Array, state: VehicleState): void {
+    const fields = VehicleStateReader.unwrap(response, 3);
+
+    state.availabilityStatus = ProtoValue.asInteger(ProtoValue.get(fields, 3)) ?? -1;
+    state.unavailableReason = ProtoValue.asInteger(ProtoValue.get(fields, 4)) ?? -1;
+    state.usageMode = ProtoValue.asInteger(ProtoValue.get(fields, 5)) ?? -1;
+    state.availabilityStateAt = Date.now();
+  }
+
+  /**
+   * 读取远程启动状态。
+   *
+   * 官方 proto：services.vehiclestates.engineremotestart.EngineRemoteStartService。
+   */
+  static async readEngineRemoteStart(client: GrpcClient, vin: string, state: VehicleState): Promise<void> {
+    const response = await client.callStatus(
+      GrpcClient.SERVICE_ENGINE_REMOTE_START, 'GetLatestEngineRemoteStart', vin);
+    VehicleStateReader.applyEngineRemoteStart(response, state);
+  }
+
+  /**
+   * 把远程启动响应映射到状态对象。
+   */
+  static applyEngineRemoteStart(response: Uint8Array, state: VehicleState): void {
+    const fields = VehicleStateReader.unwrap(response, 3);
+
+    state.engineRemoteStartStatus = ProtoValue.asInteger(ProtoValue.get(fields, 2)) ?? -1;
+    state.engineRemoteStartEndingAt = VehicleStateReader.readEndingAt(ProtoValue.get(fields, 5));
   }
 
   /**
@@ -709,6 +762,19 @@ export class VehicleStateReader {
           }
         }
       }
+      // field 47 为车辆配置码串（contentCodes）——
+      // 车身颜色、轮毂尺寸、车型年款都编码在里面。
+      const codes = ProtoValue.decodeString(ProtoValue.get(detail, 47)).trim();
+      if (codes.length > 0) {
+        state.contentCodes = codes;
+        const visual = VehicleVisual.parse(codes);
+        state.paintName = visual.paintName;
+        state.wheelInch = visual.wheelInch;
+        state.performancePack = visual.performancePack;
+        if (visual.modelYear.length > 0) {
+          state.modelYear = visual.modelYear;
+        }
+      }
       return;
     }
   }
@@ -737,6 +803,36 @@ export class VehicleStateReader {
         await task.run();
       } catch (err) {
         // 单域失败不影响其余域，与 Android 端行为一致
+        Log.warn(TAG, `读取 ${task.name} 状态失败: ${(err as Error).message}`);
+      }
+    }
+  }
+
+  /**
+   * 读取「只读状态快照」—— 本车全部可读状态域。
+   *
+   * 概览页的 readAll 是高频轮询路径，不适合塞进所有域。
+   * 这里单独提供一个「一次性读全」的入口，供能力页展示总览用。
+   *
+   * 各域读失败不影响其余域 —— 缺哪一项，页面对应位置显示「—」。
+   */
+  static async readSnapshot(client: GrpcClient, vin: string, state: VehicleState): Promise<void> {
+    const tasks: StateReadTask[] = [
+      { name: 'exterior', run: () => VehicleStateReader.readExterior(client, vin, state) },
+      { name: 'battery', run: () => VehicleStateReader.readBattery(client, vin, state) },
+      { name: 'odometer', run: () => VehicleStateReader.readOdometer(client, vin, state) },
+      { name: 'climate', run: () => VehicleStateReader.readClimate(client, vin, state) },
+      { name: 'air', run: () => VehicleStateReader.readAir(client, vin, state) },
+      { name: 'health', run: () => VehicleStateReader.readHealth(client, vin, state) },
+      { name: 'availability', run: () => VehicleStateReader.readAvailability(client, vin, state) },
+      { name: 'engineremotestart', run: () => VehicleStateReader.readEngineRemoteStart(client, vin, state) },
+      { name: 'chargeconfig', run: () => VehicleStateReader.readChargeConfig(client, vin, state) }
+    ];
+
+    for (const task of tasks) {
+      try {
+        await task.run();
+      } catch (err) {
         Log.warn(TAG, `读取 ${task.name} 状态失败: ${(err as Error).message}`);
       }
     }

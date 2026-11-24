@@ -1,4 +1,5 @@
 import { WidgetSnapshot } from './WidgetStore';
+import { CARD_OP_TTL_MS } from './CardConstants';
 import { ChargeStage, ChargeStageResolver } from '../model/VehicleState';
 
 /**
@@ -25,6 +26,12 @@ export class CardKeys {
   static readonly LOCK_TEXT: string = 'cardLockText';
   /** 驻车空调状态文案。 */
   static readonly CLIMATE_TEXT: string = 'cardClimateText';
+  /** 操作结果文案。 */
+  static readonly OP_TEXT: string = 'cardOpText';
+  /** 操作结果是否显示。 */
+  static readonly OP_VISIBLE: string = 'cardOpVisible';
+  /** 操作结果产生时刻。 */
+  static readonly OP_AT: string = 'cardOpAt';
   /** 快照时刻（epoch millis）。 */
   static readonly UPDATED_AT: string = 'cardUpdatedAt';
 }
@@ -49,11 +56,18 @@ export class CardBinding {
   cardLockText: string;
   /** 驻车空调状态文案。 */
   cardClimateText: string;
+  /** 操作结果文案。 */
+  cardOpText: string;
+  /** 操作结果是否显示。 */
+  cardOpVisible: boolean;
+  /** 操作结果产生时刻（epoch millis）。 */
+  cardOpAt: number;
   /** 快照时刻（epoch millis）。 */
   cardUpdatedAt: number;
 
   constructor(modelName: string, battery: number, range: number, chargeText: string,
-    chargeVisible: boolean, lockText: string, climateText: string, updatedAt: number) {
+    chargeVisible: boolean, lockText: string, climateText: string,
+    opText: string, opVisible: boolean, opAt: number, updatedAt: number) {
     this.cardModelName = modelName;
     this.cardBattery = battery;
     this.cardRange = range;
@@ -61,6 +75,9 @@ export class CardBinding {
     this.cardChargeVisible = chargeVisible;
     this.cardLockText = lockText;
     this.cardClimateText = climateText;
+    this.cardOpText = opText;
+    this.cardOpVisible = opVisible;
+    this.cardOpAt = opAt;
     this.cardUpdatedAt = updatedAt;
   }
 }
@@ -86,6 +103,12 @@ export interface CardDisplay {
   lockText: string;
   /** 驻车空调状态文案：空调开 / 空调关 / —。 */
   climateText: string;
+  /** 操作结果文案，空串表示没有待展示的结果。 */
+  opText: string;
+  /** 操作结果是否显示。 */
+  opVisible: boolean;
+  /** 操作结果产生时刻（epoch millis），0 表示没有结果。 */
+  opAt: number;
   /** 快照时刻（epoch millis），0 表示尚未同步。 */
   updatedAt: number;
 }
@@ -120,6 +143,10 @@ export class CardData {
         : detail;
     }
 
+    // 操作结果只在卡片上停留一小段时间，过期后自动隐去。
+    const opAlive = snapshot.opVisible && snapshot.opAt > 0 &&
+      (Date.now() - snapshot.opAt) < CARD_OP_TTL_MS;
+
     return {
       modelName: snapshot.modelName.length > 0 ? snapshot.modelName : '极星2',
       battery: snapshot.battery,
@@ -128,6 +155,9 @@ export class CardData {
       chargeVisible: visible,
       lockText: CardData.lockText(snapshot.locked),
       climateText: CardData.climateText(snapshot.climate),
+      opText: opAlive ? snapshot.opText : '',
+      opVisible: opAlive,
+      opAt: snapshot.opAt,
       updatedAt: snapshot.updatedAt
     };
   }
@@ -172,6 +202,9 @@ export class CardData {
       display.chargeVisible,
       display.lockText,
       display.climateText,
+      display.opText,
+      display.opVisible,
+      display.opAt,
       display.updatedAt
     );
   }
@@ -188,6 +221,9 @@ export class CardData {
       chargeVisible: false,
       lockText: '—',
       climateText: '—',
+      opText: '',
+      opVisible: false,
+      opAt: 0,
       updatedAt: 0
     };
   }

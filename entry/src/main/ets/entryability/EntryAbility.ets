@@ -1,10 +1,10 @@
 import { AbilityConstant, common, ConfigurationConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { router, window } from '@kit.ArkUI';
+import { window } from '@kit.ArkUI';
 import { BusinessError, commonEventManager } from '@kit.BasicServicesKit';
+import { notificationManager } from '@kit.NotificationKit';
 import { BackgroundKeeper } from '../service/BackgroundKeeper';
 import { BackgroundReset } from '../core/app/BackgroundReset';
-import { CardIntent } from '../core/vehicle/CardIntent';
 import { LiveViewData } from '../core/liveview/LiveViewData';
 import { PurifyCommand } from '../core/liveview/PurifyCommand';
 import { Log } from '../common/Log';
@@ -13,14 +13,6 @@ import { Log } from '../common/Log';
 const TAG: string = 'EntryAbility';
 
 export default class EntryAbility extends UIAbility {
-  /**
-   * 卡片跳转带来的控制项。
-   *
-   * 非空表示本次启动是桌面卡片触发的车控请求（router 事件），
-   * 需要把首页换成车控确认页。
-   */
-  private cardControl: string = '';
-
   /** 窗口舞台引用，热启动推页时需要。 */
   private windowStage: window.WindowStage | undefined = undefined;
 
@@ -33,13 +25,30 @@ export default class EntryAbility extends UIAbility {
     } catch (err) {
       hilog.error(Log.DOMAIN, TAG, 'Failed to set colorMode. Cause: %{public}s', JSON.stringify(err));
     }
-    this.cardControl = EntryAbility.cardControlOf(want);
-    if (this.cardControl.length > 0) {
-      // 控制项通过进程内通道传给确认页 —— loadContent 没有路由 params 重载
-      CardIntent.set(this.cardControl);
-    }
     hilog.info(Log.DOMAIN, TAG, 'Ability onCreate');
     this.subscribePurifyStop();
+    this.requestNotificationPermission();
+  }
+
+  /**
+   * 申请通知权限。
+   *
+   * 卡片车控的结果会用通知提示（同时也写在卡片上）。
+   * 通知权限没开时发布通知会报 1600004，通知栏提示这条路就断了 ——
+   * 这里主动申请一次，用户拒绝也不影响卡片上的结果展示。
+   */
+  private requestNotificationPermission(): void {
+    try {
+      notificationManager.requestEnableNotification(this.context as common.UIAbilityContext)
+        .then(() => {
+          hilog.info(Log.DOMAIN, TAG, '通知权限已开启');
+        })
+        .catch((err: BusinessError) => {
+          hilog.info(Log.DOMAIN, TAG, '通知权限未开启，结果仅显示在卡片上');
+        });
+    } catch (err) {
+      hilog.info(Log.DOMAIN, TAG, '申请通知权限异常，结果仅显示在卡片上');
+    }
   }
 
   /**
@@ -83,71 +92,15 @@ export default class EntryAbility extends UIAbility {
     hilog.info(Log.DOMAIN, TAG, '%{public}s', 'Ability onWindowStageCreate');
     this.windowStage = windowStage;
 
-    // 卡片触发的车控请求直接进确认页；正常启动进概览页
-    const page = this.cardControl.length > 0 ? 'pages/CardControl' : 'pages/Index';
-
-    windowStage.loadContent(page, (err: BusinessError) => {
+    // 卡片车控走 message 事件在提供方进程内直接执行，不拉起本应用 ——
+    // 所以这里永远只需要加载概览页。
+    windowStage.loadContent('pages/Index', (err: BusinessError) => {
       if (err.code) {
         hilog.error(Log.DOMAIN, TAG, 'Failed to load the content. Cause: %{public}s', JSON.stringify(err));
         return;
       }
       hilog.info(Log.DOMAIN, TAG, 'Succeeded in loading the content.');
     });
-  }
-
-  /**
-   * 应用已在后台运行时收到卡片的 router 事件。
-   */
-  onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
-    const control = EntryAbility.cardControlOf(want);
-    if (control.length === 0) {
-      return;
-    }
-    this.cardControl = control;
-    hilog.info(Log.DOMAIN, TAG, 'Ability onNewWant, card control: %{public}s', control);
-    CardIntent.set(control);
-    this.pushControlPage();
-  }
-
-  /**
-   * 把车控确认页压入路由栈。
-   *
-   * 概览页保留在栈底，用户处理完车控可以返回。
-   */
-  private pushControlPage(): void {
-    const stage = this.windowStage;
-    if (stage === undefined) {
-      return;
-    }
-    try {
-      const options: router.RouterOptions = { url: 'pages/CardControl' };
-      stage.getMainWindowSync().getUIContext().getRouter().pushUrl(options);
-    } catch (err) {
-      hilog.error(Log.DOMAIN, TAG, 'Failed to push control page. Cause: %{public}s', JSON.stringify(err));
-    }
-  }
-
-  /**
-   * 从 Want 中解析卡片传来的控制项。
-   *
-   * postCardAction 的 params 会被序列化到 want.parameters.params（JSON 字符串）。
-   *
-   * @param want 启动或热启动的 Want
-   * @returns 控制项（lock / climate）；不是卡片请求时返回空串
-   */
-  private static cardControlOf(want: Want): string {
-    const raw = want?.parameters?.params;
-    if (raw === undefined || raw === null) {
-      return '';
-    }
-    try {
-      const params = JSON.parse(raw as string) as Record<string, Object>;
-      const control = params['control'] as string;
-      return (control === 'lock' || control === 'climate') ? control : '';
-    } catch (err) {
-      hilog.error(Log.DOMAIN, TAG, 'Failed to parse card params. Cause: %{public}s', JSON.stringify(err));
-      return '';
-    }
   }
 
   onWindowStageDestroy(): void {

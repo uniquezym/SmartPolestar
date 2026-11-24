@@ -1,6 +1,7 @@
 import { formBindingData, FormExtensionAbility, formInfo, formProvider } from '@kit.FormKit';
 import { Want } from '@kit.AbilityKit';
 import { CardBinding, CardData } from '../../core/vehicle/CardData';
+import { CardControlTask } from '../../core/vehicle/CardControlTask';
 import { WidgetStore } from '../../core/vehicle/WidgetStore';
 import { Log } from '../../common/Log';
 
@@ -53,10 +54,17 @@ export default class CardFormAbility extends FormExtensionAbility {
   /**
    * 卡片收到 message 事件。
    *
-   * 本卡片的控制走 router 事件跳主应用，不在这里处理事件。
+   * 卡片的「整车锁 / 驻车空调」按钮走这条路：点一下直接执行车控，
+   * **不拉起任何界面**。执行与结果反馈见 CardControlTask。
+   *
+   * 注意这里是异步的 —— 回调返回后提供方进程还可能被杀，
+   * 但车控指令是在回调里就开始下发的，超时窗口约 10 秒，够跑完。
    */
   onFormEvent(formId: string, message: string): void {
     Log.info(TAG, `卡片事件: ${formId} ${message}`);
+    CardControlTask.run(this.context, formId, message).catch((err: Error) => {
+      Log.error(TAG, `卡片车控失败: ${err.message}`);
+    });
   }
 
   /**

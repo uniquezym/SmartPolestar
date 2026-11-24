@@ -2,6 +2,7 @@ import { preferences } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
 import { SessionState } from '../model/SessionState';
 import { TokenVault } from './TokenVault';
+import { DiscoveredHosts } from '../net/ServiceDiscovery';
 import { Log } from '../../common/Log';
 
 /** 本文件的日志 Tag —— 过滤日志时按它筛。 */
@@ -26,12 +27,21 @@ export class SessionStore {
   /** 上次成功刷新车辆状态的时刻（epoch millis）。对应 Android 端的 "last_refresh_at"。 */
   static readonly KEY_LAST_REFRESH_AT: string = 'last_refresh_at';
 
+  /**
+   * 服务发现得到的 gRPC 主机名的缓存键。
+   *
+   * 主机名不属于 token 的一部分，不能写进 token_blob（那会破坏与
+   * Android 端一致的密文布局）。但缓存它很有价值：卡片进程执行车控时
+   * 只有约 10 秒窗口，省掉一次服务发现往返就多一分余量。
+   */
+  static readonly KEY_HOSTS: string = 'hosts';
+
   private static store: preferences.Preferences | undefined = undefined;
 
   /**
    * 获取（并缓存）Preferences 实例。
    */
-  static async open(context: common.UIAbilityContext): Promise<preferences.Preferences> {
+  static async open(context: common.Context): Promise<preferences.Preferences> {
     if (SessionStore.store !== undefined) {
       return SessionStore.store;
     }
@@ -42,7 +52,7 @@ export class SessionStore {
   /**
    * 保存会话（自动加密）。
    */
-  static async save(context: common.UIAbilityContext, session: SessionState): Promise<void> {
+  static async save(context: common.Context, session: SessionState): Promise<void> {
     const store = await SessionStore.open(context);
     const plain = session.toPlaintext();
     const cipher = await TokenVault.encrypt(SessionStore.utf8(plain));
@@ -56,7 +66,7 @@ export class SessionStore {
    *
    * @returns 会话；不存在或数据损坏时返回 undefined
    */
-  static async load(context: common.UIAbilityContext): Promise<SessionState | undefined> {
+  static async load(context: common.Context): Promise<SessionState | undefined> {
     const store = await SessionStore.open(context);
     const blob = await store.get(SessionStore.KEY_TOKEN_BLOB, '') as string;
     if (blob.length === 0 || blob.length > 131072) {
@@ -79,7 +89,7 @@ export class SessionStore {
   /**
    * 清空会话。对应 m1419v。
    */
-  static async clear(context: common.UIAbilityContext): Promise<void> {
+  static async clear(context: common.Context): Promise<void> {
     const store = await SessionStore.open(context);
     await store.clear();
     await store.flush();
@@ -88,7 +98,7 @@ export class SessionStore {
   /**
    * 读取续期退避时刻。
    */
-  static async getRefreshRetryAfter(context: common.UIAbilityContext): Promise<number> {
+  static async getRefreshRetryAfter(context: common.Context): Promise<number> {
     const store = await SessionStore.open(context);
     return await store.get(SessionStore.KEY_REFRESH_RETRY_AFTER, 0) as number;
   }
@@ -96,7 +106,7 @@ export class SessionStore {
   /**
    * 写入续期退避时刻。
    */
-  static async setRefreshRetryAfter(context: common.UIAbilityContext, timestamp: number): Promise<void> {
+  static async setRefreshRetryAfter(context: common.Context, timestamp: number): Promise<void> {
     const store = await SessionStore.open(context);
     await store.put(SessionStore.KEY_REFRESH_RETRY_AFTER, timestamp);
     await store.flush();
@@ -105,7 +115,7 @@ export class SessionStore {
   /**
    * 清除续期退避时刻。
    */
-  static async clearRefreshRetryAfter(context: common.UIAbilityContext): Promise<void> {
+  static async clearRefreshRetryAfter(context: common.Context): Promise<void> {
     const store = await SessionStore.open(context);
     await store.delete(SessionStore.KEY_REFRESH_RETRY_AFTER);
     await store.flush();
@@ -114,7 +124,7 @@ export class SessionStore {
   /**
    * 读取上次成功刷新车辆状态的时刻。
    */
-  static async getLastRefreshAt(context: common.UIAbilityContext): Promise<number> {
+  static async getLastRefreshAt(context: common.Context): Promise<number> {
     const store = await SessionStore.open(context);
     return await store.get(SessionStore.KEY_LAST_REFRESH_AT, 0) as number;
   }
@@ -122,9 +132,41 @@ export class SessionStore {
   /**
    * 写入上次成功刷新车辆状态的时刻。
    */
-  static async setLastRefreshAt(context: common.UIAbilityContext, timestamp: number): Promise<void> {
+  static async setLastRefreshAt(context: common.Context, timestamp: number): Promise<void> {
     const store = await SessionStore.open(context);
     await store.put(SessionStore.KEY_LAST_REFRESH_AT, timestamp);
+    await store.flush();
+  }
+
+  /**
+   * 读取缓存的 gRPC 主机名。
+   *
+   * @returns 主机名；从未缓存过时返回 undefined
+   */
+  static async loadHosts(context: common.Context): Promise<DiscoveredHosts | undefined> {
+    const store = await SessionStore.open(context);
+    const raw = await store.get(SessionStore.KEY_HOSTS, '') as string;
+    if (raw.length === 0) {
+      return undefined;
+    }
+    try {
+      const parsed = JSON.parse(raw) as DiscoveredHosts;
+      if (parsed === undefined || parsed === null) {
+        return undefined;
+      }
+      return parsed;
+    } catch (err) {
+      Log.warn(TAG, `读取主机名缓存失败: ${(err as Error).message}`);
+      return undefined;
+    }
+  }
+
+  /**
+   * 缓存 gRPC 主机名。
+   */
+  static async saveHosts(context: common.Context, hosts: DiscoveredHosts): Promise<void> {
+    const store = await SessionStore.open(context);
+    await store.put(SessionStore.KEY_HOSTS, JSON.stringify(hosts));
     await store.flush();
   }
 

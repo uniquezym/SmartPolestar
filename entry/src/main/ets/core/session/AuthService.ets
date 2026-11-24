@@ -39,7 +39,7 @@ export class AuthService {
    * @param password 密码（明文置于 JSON body，靠 TLS + 签名保护）
    * @returns 登录后的会话（已落盘）
    */
-  static async login(context: common.UIAbilityContext, phone: string, password: string):
+  static async login(context: common.Context, phone: string, password: string):
     Promise<SessionState> {
     const body = `{"clientId":"${RequestSigner.CLIENT_ID}","phone":"${phone}",` +
       `"password":"${password}","autocrt":true}`;
@@ -94,7 +94,7 @@ export class AuthService {
    * @param session 会话（就地更新）
    * @param force   为 true 时无视过期时间强制续期
    */
-  static async refreshIfNeeded(context: common.UIAbilityContext, session: SessionState,
+  static async refreshIfNeeded(context: common.Context, session: SessionState,
     force: boolean): Promise<void> {
     const now = Date.now();
     if (!force && !session.needsRefresh(now)) {

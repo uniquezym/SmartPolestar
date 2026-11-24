@@ -4,6 +4,6 @@
     "pages/Login",
     "pages/Map",
     "pages/ParkedPlace",
-    "pages/CardControl"
+    "pages/Capability"
   ]
 }

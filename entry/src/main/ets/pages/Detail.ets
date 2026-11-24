@@ -1,9 +1,11 @@
 import { HealthCard } from '../components/HealthCard';
+import { StateRow } from '../components/StateRow';
+import { AppIconName } from '../components/Icons';
 
 /**
  * 车辆详情页。
  *
- * 当前只承载「健康与保养」卡片；
+ * 当前承载「健康与保养」卡片与「车辆能力」入口；
  * 基础信息 / 里程与能耗 / 最后停车位置待 UX 定稿后再补。
  */
 @Component
@@ -32,6 +34,11 @@ export struct Detail {
   @Prop lightFaultCount: number = 0;
   /** 外部灯光故障灯组名。 */
   @Prop lightFaultNames: string[] = [];
+
+  /**
+   * 「车辆能力」入口的点击回调。
+   */
+  onCapabilityTap?: () => void;
 
   build() {
     Scroll() {
@@ -65,6 +72,20 @@ export struct Detail {
           tyreWarnings: this.tyreWarnings,
           lightFaultCount: this.lightFaultCount,
           lightFaultNames: this.lightFaultNames
+        })
+
+        // ---------- 车辆能力入口 ----------
+        StateRow({
+          icon: AppIconName.TAB_DETAIL,
+          label: '车辆能力',
+          value: '查看本车支持的功能',
+          showChevron: true,
+          showDivider: false,
+          onTap: () => {
+            if (this.onCapabilityTap !== undefined) {
+              this.onCapabilityTap();
+            }
+          }
         })
       }
       .width('100%')

@@ -23,6 +23,18 @@ export class GrpcClient {
   static readonly SERVICE_PRECLEANING: string = 'services.vehiclestates.precleaning.PreCleaningService';
   static readonly SERVICE_ODOMETER: string = 'services.vehiclestates.odometer.OdometerService';
   static readonly SERVICE_HEALTH: string = 'services.vehiclestates.health.HealthService';
+  /**
+   * 车辆可用性服务。
+   * 官方 proto：services.vehiclestates.availability.AvailabilityService。
+   * 反映车辆当前是否可被远程访问（无网络 / 省电模式 / 使用中 / OTA 中…）。
+   */
+  static readonly SERVICE_AVAILABILITY: string = 'services.vehiclestates.availability.AvailabilityService';
+  /**
+   * 远程启动服务。
+   * 官方 proto：services.vehiclestates.engineremotestart.EngineRemoteStartService。
+   */
+  static readonly SERVICE_ENGINE_REMOTE_START: string =
+    'services.vehiclestates.engineremotestart.EngineRemoteStartService';
   static readonly SERVICE_CAR_INFO: string = 'car_information.CarInformation';
   static readonly SERVICE_INVOCATION: string = 'invocation.InvocationService';
   static readonly SERVICE_CLIMATE_TIMER: string = 'chronos.services.v1.ParkingClimateTimerService';
@@ -85,7 +97,7 @@ export class GrpcClient {
   /** 空调定时相关调用的超时（毫秒）。 */
   static readonly TIMER_TIMEOUT_MS: number = 20000;
 
-  private context: common.UIAbilityContext | undefined = undefined;
+  private context: common.Context | undefined = undefined;
   private session: SessionState | undefined = undefined;
   /** 按主机缓存的通道。 */
   private channels: Map<string, GrpcRcpChannel> = new Map();
@@ -98,7 +110,7 @@ export class GrpcClient {
    */
   onStreamFatal?: (fullMethod: string, message: string) => void;
 
-  constructor(context: common.UIAbilityContext, session: SessionState) {
+  constructor(context: common.Context, session: SessionState) {
     this.context = context;
     this.session = session;
   }

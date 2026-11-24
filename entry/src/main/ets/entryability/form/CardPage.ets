@@ -1,4 +1,5 @@
 import { AppIcon, AppIconName } from '../../components/Icons';
+import { CARD_OP_TTL_MS } from '../../core/vehicle/CardConstants';
 
 /**
  * 桌面卡片页面（4×2）。
@@ -15,9 +16,14 @@ import { AppIcon, AppIconName } from '../../components/Icons';
  * 这里是**字面量**而不是 CardKeys.MODEL_NAME —— 装饰器参数需编译期常量，
  * 写成静态字段虽然运行期等价，但编译期校验会告警。
  *
- * 【控制交互】点击按钮通过 postCardAction 的 router 事件跳转到主应用的
- * 车控确认页，由主应用完成指纹验证与指令下发 —— 卡片进程不能弹指纹框，
- * 且 FormExtensionAbility 生命周期只有 10 秒，做不了「验证 → 下发 → 轮询确认」。
+ * 【控制交互】点击按钮用 postCardAction 的 **message** 事件把控制项交给
+ * 卡片提供方进程（FormExtensionAbility.onFormEvent）直接执行 ——
+ * **不跳转任何界面**，用户点完就停在桌面。
+ *
+ * 为什么不用 router 事件拉起主应用：那样会跳到确认页，
+ * 与「点一下直接执行」的预期不符。
+ * 为什么不在卡片里自己做车控：卡片页面只有渲染能力，
+ * 真正的网络链路要放在提供方进程里（见 CardControlTask）。
  */
 
 /**
@@ -44,8 +50,28 @@ struct CardPage {
   @LocalStorageProp('cardLockText') lockText: string = '—';
   /** 驻车空调状态文案。 */
   @LocalStorageProp('cardClimateText') climateText: string = '—';
+  /** 操作结果文案。 */
+  @LocalStorageProp('cardOpText') opText: string = '';
+  /** 操作结果是否显示。 */
+  @LocalStorageProp('cardOpVisible') opVisible: boolean = false;
+  /** 操作结果产生时刻（epoch millis）。 */
+  @LocalStorageProp('cardOpAt') opAt: number = 0;
   /** 快照时刻（epoch millis）。 */
   @LocalStorageProp('cardUpdatedAt') updatedAt: number = 0;
+
+  /**
+   * 操作结果当前是否应当显示。
+   *
+   * 结果只在卡片上停留几秒，之后自己隐去。
+   * 卡片页面不会因为「时间到了」被重新推送，
+   * 所以这里按时刻算 —— 下一次重绘时自然就不显示了。
+   */
+  private opShowing(): boolean {
+    if (!this.opVisible || this.opAt <= 0) {
+      return false;
+    }
+    return (Date.now() - this.opAt) < CARD_OP_TTL_MS;
+  }
 
   /**
    * 「距上次更新」的相对时间文案。
@@ -89,20 +115,32 @@ struct CardPage {
   }
 
   /**
-   * 跳转到主应用的车控确认页。
+   * 把控制项交给卡片提供方进程直接执行。
    *
-   * 指纹验证与指令下发都在主应用里完成，卡片只负责入口。
+   * 用 message 事件而不是 router 事件 —— router 会拉起主应用界面，
+   * message 只在提供方进程内投递，不打断用户。
    *
    * @param control 控制项：lock / climate
    */
-  private gotoControl(control: string): void {
+  private sendControl(control: string): void {
     postCardAction(this, {
-      action: 'router',
-      abilityName: 'EntryAbility',
+      action: 'message',
       params: {
-        control: control
+        value: control
       }
     });
+  }
+
+  /**
+   * 消费掉点击卡片空白区域的事件。
+   *
+   * 卡片根节点不绑 onClick 时，点击卡片主体会触发系统默认行为 ——
+   * 直接把应用拉到前台。这与「点一下直接执行、不打断用户」的预期冲突。
+   *
+   * 这里在根节点绑一个空的 onClick 把事件吃掉：卡片就变成一块纯展示的桌面，
+   * 只有底部的两个控制按钮有反应。
+   */
+  private consumeTap(): void {
   }
 
   /**
@@ -128,112 +166,138 @@ struct CardPage {
     .border({ width: 1, color: $r('app.color.app_card_border') })
     .backgroundColor(Color.Transparent)
     .onClick(() => {
-      this.gotoControl(control);
+      this.sendControl(control);
     })
   }
 
   build() {
-    Column() {
-      // ---------- 顶栏：车型 + 更新时间 ----------
-      Row() {
-        Text(this.modelName)
-          .fontSize(15)
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.app_primary_text'))
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
+    Stack({ alignContent: Alignment.Bottom }) {
+      Column() {
+        // ---------- 顶栏：车型 + 更新时间 ----------
+        Row() {
+          Text(this.modelName)
+            .fontSize(15)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.app_primary_text'))
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .layoutWeight(1)
+          Text(this.relativeTime())
+            .fontSize(9.5)
+            .fontFamily('HarmonyOS Sans Mono')
+            .fontColor($r('app.color.app_tertiary_text'))
+        }
+        .width('100%')
+        .height(20)
+        .alignItems(VerticalAlign.Bottom)
+
+        // ---------- 电量 / 预计续航 ----------
+        Row() {
+          Column() {
+            Text('电量')
+              .fontSize(9.5)
+              .fontFamily('HarmonyOS Sans Mono')
+              .fontColor($r('app.color.app_tertiary_text'))
+              .letterSpacing(1.5)
+            Row({ space: 3 }) {
+              Text(this.batteryText())
+                .fontSize(30)
+                .fontFamily('HarmonyOS Sans Mono')
+                .fontColor($r('app.color.app_primary_text'))
+              Text('%')
+                .fontSize(12)
+                .fontColor($r('app.color.app_tertiary_text'))
+            }
+            .margin({ top: 5 })
+            .alignItems(VerticalAlign.Bottom)
+          }
+          .alignItems(HorizontalAlign.Start)
           .layoutWeight(1)
-        Text(this.relativeTime())
-          .fontSize(9.5)
-          .fontFamily('HarmonyOS Sans Mono')
-          .fontColor($r('app.color.app_tertiary_text'))
+
+          Column() {
+            Text('预计续航')
+              .fontSize(9.5)
+              .fontFamily('HarmonyOS Sans Mono')
+              .fontColor($r('app.color.app_tertiary_text'))
+              .letterSpacing(1.5)
+            Row({ space: 3 }) {
+              Text(this.rangeText())
+                .fontSize(30)
+                .fontFamily('HarmonyOS Sans Mono')
+                .fontColor($r('app.color.app_primary_text'))
+              Text('km')
+                .fontSize(12)
+                .fontColor($r('app.color.app_tertiary_text'))
+            }
+            .margin({ top: 5 })
+            .alignItems(VerticalAlign.Bottom)
+          }
+          .alignItems(HorizontalAlign.Start)
+          .layoutWeight(1)
+          .padding({ left: 14 })
+          .border({ width: { left: 1 }, color: $r('app.color.app_rule') })
+        }
+        .width('100%')
+        .margin({ top: 6 })
+
+        // ---------- 充电信息行：固定 16vp 槽位 ----------
+        // 未充电时隐藏但保留占位，保证下方控制按钮不随充电状态上下跳动。
+        Row({ space: 6 }) {
+          AppIcon({ name: AppIconName.CHARGE, iconSize: 11, color: $r('app.color.app_accent') })
+            .width(11)
+            .height(11)
+          Text(this.chargeText)
+            .fontSize(10)
+            .fontFamily('HarmonyOS Sans Mono')
+            .fontColor($r('app.color.app_accent'))
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .layoutWeight(1)
+        }
+        .width('100%')
+        .height(16)
+        .margin({ top: 5 })
+        .alignItems(VerticalAlign.Center)
+        .visibility(this.chargeVisible ? Visibility.Visible : Visibility.Hidden)
+
+        // 把控制按钮压到卡片底部
+        Blank()
+
+        // ---------- 控制按钮 ----------
+        Row({ space: 8 }) {
+          this.controlButton(this.lockIcon(), this.lockText, 'lock')
+          this.controlButton(AppIconName.CLIMATE_COOL, this.climateText, 'climate')
+        }
+        .width('100%')
       }
       .width('100%')
-      .height(20)
-      .alignItems(VerticalAlign.Bottom)
+      .height('100%')
+      .padding({ left: 14, right: 14, top: 12, bottom: 12 })
 
-      // ---------- 电量 / 预计续航 ----------
-      Row() {
-        Column() {
-          Text('电量')
-            .fontSize(9.5)
-            .fontFamily('HarmonyOS Sans Mono')
-            .fontColor($r('app.color.app_tertiary_text'))
-            .letterSpacing(1.5)
-          Row({ space: 3 }) {
-            Text(this.batteryText())
-              .fontSize(30)
-              .fontFamily('HarmonyOS Sans Mono')
-              .fontColor($r('app.color.app_primary_text'))
-            Text('%')
-              .fontSize(12)
-              .fontColor($r('app.color.app_tertiary_text'))
-          }
-          .margin({ top: 5 })
-          .alignItems(VerticalAlign.Bottom)
-        }
-        .alignItems(HorizontalAlign.Start)
-        .layoutWeight(1)
-
-        Column() {
-          Text('预计续航')
-            .fontSize(9.5)
-            .fontFamily('HarmonyOS Sans Mono')
-            .fontColor($r('app.color.app_tertiary_text'))
-            .letterSpacing(1.5)
-          Row({ space: 3 }) {
-            Text(this.rangeText())
-              .fontSize(30)
-              .fontFamily('HarmonyOS Sans Mono')
-              .fontColor($r('app.color.app_primary_text'))
-            Text('km')
-              .fontSize(12)
-              .fontColor($r('app.color.app_tertiary_text'))
-          }
-          .margin({ top: 5 })
-          .alignItems(VerticalAlign.Bottom)
-        }
-        .alignItems(HorizontalAlign.Start)
-        .layoutWeight(1)
-        .padding({ left: 14 })
-        .border({ width: { left: 1 }, color: $r('app.color.app_rule') })
-      }
-      .width('100%')
-      .margin({ top: 6 })
-
-      // ---------- 充电信息行：固定 16vp 槽位 ----------
-      // 未充电时隐藏但保留占位，保证下方控制按钮不随充电状态上下跳动。
-      Row({ space: 6 }) {
-        AppIcon({ name: AppIconName.CHARGE, iconSize: 11, color: $r('app.color.app_accent') })
-          .width(11)
-          .height(11)
-        Text(this.chargeText)
+      // ---------- 操作结果浮层 ----------
+      // 卡片进程弹不了 Toast，操作结果只能显示在这里。
+      // 盖在充电信息行的位置 —— 两者不会同时出现（操作发生时充电行信息意义不大）。
+      if (this.opShowing()) {
+        Text(this.opText)
           .fontSize(10)
           .fontFamily('HarmonyOS Sans Mono')
           .fontColor($r('app.color.app_accent'))
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .layoutWeight(1)
+          .width('100%')
+          .height(16)
+          .textAlign(TextAlign.Center)
+          .padding({ left: 14, right: 14 })
+          .backgroundColor($r('app.color.app_background'))
       }
-      .width('100%')
-      .height(16)
-      .margin({ top: 5 })
-      .alignItems(VerticalAlign.Center)
-      .visibility(this.chargeVisible ? Visibility.Visible : Visibility.Hidden)
-
-      // 把控制按钮压到卡片底部
-      Blank()
-
-      // ---------- 控制按钮 ----------
-      Row({ space: 8 }) {
-        this.controlButton(this.lockIcon(), this.lockText, 'lock')
-        this.controlButton(AppIconName.CLIMATE_COOL, this.climateText, 'climate')
-      }
-      .width('100%')
     }
     .width('100%')
     .height('100%')
-    .padding({ left: 14, right: 14, top: 12, bottom: 12 })
     .backgroundColor($r('app.color.app_background'))
+    // 卡片根节点绑 onClick，把点击卡片主体的事件吃掉。
+    // 不绑的话系统默认行为是把应用拉到前台 —— 那正是要避免的。
+    .onClick(() => {
+      this.consumeTap();
+    })
   }
 }

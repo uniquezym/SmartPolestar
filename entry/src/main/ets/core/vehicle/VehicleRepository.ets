@@ -1,7 +1,7 @@
 import { common } from '@kit.AbilityKit';
 import { GrpcClient } from '../net/grpc/GrpcClient';
 import { HttpClient } from '../net/HttpClient';
-import { ServiceDiscovery } from '../net/ServiceDiscovery';
+import { ServiceDiscovery, DiscoveredHosts } from '../net/ServiceDiscovery';
 import { VehicleStateReader } from '../net/VehicleStateReader';
 import { SessionState } from '../model/SessionState';
 import { SessionStore } from '../session/SessionStore';
@@ -19,7 +19,7 @@ const TAG: string = 'VehicleRepository';
  * 对应 Android 端 ga0 的会话管理与 m1417m（拉取车辆列表）流程。
  */
 export class VehicleRepository {
-  private context: common.UIAbilityContext;
+  private context: common.Context;
   private session: SessionState | undefined = undefined;
   private client: GrpcClient | undefined = undefined;
   /** 账号下的车辆 VIN 列表。 */
@@ -34,7 +34,7 @@ export class VehicleRepository {
    */
   onStreamBroken?: (fullMethod: string, message: string) => void;
 
-  constructor(context: common.UIAbilityContext) {
+  constructor(context: common.Context) {
     this.context = context;
   }
 
@@ -70,14 +70,48 @@ export class VehicleRepository {
     }
     const session = this.session as SessionState;
 
-    // 服务发现（仅在主机缺失时发起）
-    await ServiceDiscovery.resolveHosts(session);
+    // 服务发现（仅在主机缺失时发起）。
+    // 先试本地缓存 —— 卡片进程只有约 10 秒窗口，省掉一次网络往返很关键。
+    await this.resolveHosts(session);
     Log.info(TAG, `C3 主机: ${session.c3Host} / LBS 主机: ${session.c3LbsHost}`);
 
     if (this.client === undefined) {
       this.client = new GrpcClient(this.context, session);
     }
     return this.client;
+  }
+
+  /**
+   * 解析 gRPC 主机名，并缓存结果。
+   *
+   * 优先用本地缓存（主应用此前已解析过），缓存缺失或不可信时才走服务发现。
+   * 服务发现的结果会写回缓存，下次直接命中。
+   */
+  private async resolveHosts(session: SessionState): Promise<void> {
+    if (session.c3Host.length === 0 || session.c3LbsHost.length === 0) {
+      const cached = await SessionStore.loadHosts(this.context);
+      if (cached !== undefined) {
+        if (session.c3Host.length === 0 &&
+          ServiceDiscovery.isTrustedHost(cached.c3)) {
+          session.c3Host = cached.c3;
+        }
+        if (session.c3LbsHost.length === 0 &&
+          ServiceDiscovery.isTrustedHost(cached.c3Lbs)) {
+          session.c3LbsHost = cached.c3Lbs;
+        }
+      }
+    }
+
+    await ServiceDiscovery.resolveHosts(session);
+
+    // 解析成功就写回缓存 —— 主机名会变，写缓存前再校验一次白名单。
+    if (session.c3Host.length > 0 || session.c3LbsHost.length > 0) {
+      const hosts: DiscoveredHosts = {
+        c3: session.c3Host,
+        c3Lbs: session.c3LbsHost
+      };
+      await SessionStore.saveHosts(this.context, hosts);
+    }
   }
 
   /**
@@ -249,6 +283,20 @@ export class VehicleRepository {
     const state = new VehicleState();
     state.vin = vin;
     await VehicleStateReader.readAll(client, vin, state);
+    return state;
+  }
+
+  /**
+   * 读取「只读状态快照」—— 本车全部可读状态域。
+   *
+   * 与 readState 的区别：readState 走概览页那套高频路径，
+   * 这里额外读了可用性与远程启动两个域，供能力页做总览展示。
+   */
+  async readSnapshot(vin: string): Promise<VehicleState> {
+    const client = await this.prepare();
+    const state = new VehicleState();
+    state.vin = vin;
+    await VehicleStateReader.readSnapshot(client, vin, state);
     return state;
   }
 

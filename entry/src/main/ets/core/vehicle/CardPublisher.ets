@@ -25,8 +25,16 @@ export class CardPublisher {
    * @param context  主应用上下文
    * @param snapshot 状态快照
    */
-  static async publish(context: common.UIAbilityContext, snapshot: WidgetSnapshot): Promise<void> {
-    // 1. 落盘 —— 卡片被拉起时靠它渲染
+  static async publish(context: common.Context, snapshot: WidgetSnapshot): Promise<void> {
+    // 1. 落盘 —— 卡片被拉起时靠它渲染。
+    //    主应用刷新状态时不能把卡片上正在显示的操作结果冲掉 ——
+    //    那条结果只在卡片上停留几秒，刷新周期远长于它。
+    const previous = await WidgetStore.load(context);
+    if (previous !== undefined && previous.opVisible && previous.opAt > 0) {
+      snapshot.opText = previous.opText;
+      snapshot.opVisible = previous.opVisible;
+      snapshot.opAt = previous.opAt;
+    }
     await WidgetStore.save(context, snapshot);
 
     // 2. 推送给已添加的卡片
@@ -42,18 +50,29 @@ export class CardPublisher {
       return;
     }
 
-    const data = CardData.binding(CardData.display(snapshot));
-    const binding = formBindingData.createFormBindingData(data);
-
     for (const formId of formIds) {
-      try {
-        await formProvider.updateForm(formId, binding);
-        await formProvider.setFormNextRefreshTime(formId, CardPublisher.refreshMinutes(snapshot));
-      } catch (err) {
-        Log.warn(TAG, `推送卡片 ${formId} 失败: ${(err as Error).message}`);
-      }
+      await CardPublisher.pushTo(formId, snapshot);
     }
     Log.info(TAG, `已推送 ${formIds.length} 张卡片`);
+  }
+
+  /**
+   * 把状态推送给指定的一张卡片。
+   *
+   * 卡片提供方进程执行完车控后走这里回写 —— 它已经知道自己的 formId，
+   * 不必再枚举全部卡片。
+   *
+   * @param formId   卡片 ID
+   * @param snapshot 状态快照
+   */
+  static async pushTo(formId: string, snapshot: WidgetSnapshot): Promise<void> {
+    const data = CardData.binding(CardData.display(snapshot));
+    const binding = formBindingData.createFormBindingData(data);
+    try {
+      await formProvider.updateForm(formId, binding);
+    } catch (err) {
+      Log.warn(TAG, `推送卡片 ${formId} 失败: ${(err as Error).message}`);
+    }
   }
 
   /**
@@ -99,6 +118,9 @@ export class CardPublisher {
       remainingMinutes: remainingMinutes,
       locked: locked,
       climate: climate,
+      opText: '',
+      opVisible: false,
+      opAt: 0,
       updatedAt: Date.now()
     };
   }

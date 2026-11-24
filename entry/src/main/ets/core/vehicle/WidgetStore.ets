@@ -155,6 +155,21 @@ export interface WidgetSnapshot {
   locked: string;
   /** 驻车空调状态文案：开启 / 关闭。 */
   climate: string;
+  /**
+   * 最近一次卡片操作的结果文案，空串表示没有待展示的结果。
+   *
+   * 卡片进程没有 Toast 能力，操作结果只能显示在卡片自己身上。
+   */
+  opText: string;
+  /** 操作结果是否显示。 */
+  opVisible: boolean;
+  /**
+   * 操作结果的产生时刻（epoch millis），0 表示没有结果。
+   *
+   * 结果只在卡片上停留一小段时间，过期后自动隐藏 ——
+   * 不然用户会一直看着一句旧的「已解锁」。
+   */
+  opAt: number;
   /** 快照生成时刻（epoch millis）。 */
   updatedAt: number;
 }

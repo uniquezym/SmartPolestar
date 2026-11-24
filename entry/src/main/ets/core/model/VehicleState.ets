@@ -25,6 +25,12 @@ export class VehicleState {
   modelYear: string = '';
   batteryCapacityKwh: number | undefined = undefined;
   contentCodes: string = '';
+  /** 车身颜色中文名，空串表示未识别。 */
+  paintName: string = '';
+  /** 轮毂尺寸（英寸），0 表示未识别。 */
+  wheelInch: number = 0;
+  /** 是否高性能套件。 */
+  performancePack: boolean = false;
 
   // ---- 电池与充电 ----
   battery: number | undefined = undefined;
@@ -121,6 +127,10 @@ export class VehicleState {
   hoodState: number = -1;
   /** 充电口状态。field 13：1 或 3 视为开启。 */
   chargePortState: number = -1;
+  /** 天窗状态。field 14。 */
+  sunroofState: number = -1;
+  /** 报警状态。field 15：1=空闲 2=已触发。 */
+  alarmState: number = -1;
 
   // ---- 空气净化 ----
   air: string = '未知';
@@ -214,6 +224,30 @@ export class VehicleState {
   softwareUpdateStatus: string = '';
   softwareUpdateName: string = '';
   softwareUpdateScheduled: boolean = false;
+
+  // ---- 车辆可用性（availability 域）----
+  /**
+   * 车辆可用状态。
+   * 协议 Availability.AvailabilityStatus：0=未指定 1=可用 2=不可用。
+   */
+  availabilityStatus: number = -1;
+  /**
+   * 不可用原因。
+   * 协议 Availability.UnavailableReason：1=无网络 2=省电模式 3=车辆使用中
+   * 4=OTA 安装中 5=盗抢追踪中 6=服务模式。
+   */
+  unavailableReason: number = -1;
+  /**
+   * 使用模式。
+   * 协议 Availability.UsageMode：1=废弃 2=未激活 3=便利 4=激活 5=行驶 6=发动机运行 7=发动机熄火。
+   */
+  usageMode: number = -1;
+  /** 远程启动状态。协议 EngineRemoteStart.RunningStatus：1=关闭 2=启动中 3=运行中 4=停止中。 */
+  engineRemoteStartStatus: number = -1;
+  /** 远程启动结束时刻（epoch 毫秒）。 */
+  engineRemoteStartEndingAt: number = 0;
+  /** 可用性状态更新时间。 */
+  availabilityStateAt: number = 0;
 
   // ---- 各域最后成功更新时间 ----
   batteryStateAt: number = 0;
@@ -453,3 +487,38 @@ export const MAINTENANCE_LABELS: string[] = [
   '未提供', '正常', '未知警告', '保养将近', '发动机工时将近', '里程将近',
   '需要保养', '发动机工时到期', '里程到期', '保养逾期', '发动机工时逾期', '里程逾期'
 ];
+
+/**
+ * 开合状态文案。对应协议 Exterior.OpenStatus。
+ */
+export const OPEN_STATUS_LABELS: string[] = ['未知', '开启', '关闭', '未关严'];
+
+/**
+ * 报警状态文案。对应协议 Exterior.AlarmStatus。
+ */
+export const ALARM_STATUS_LABELS: string[] = ['未知', '空闲', '已触发'];
+
+/**
+ * 车辆可用状态文案。对应协议 Availability.AvailabilityStatus。
+ */
+export const AVAILABILITY_STATUS_LABELS: string[] = ['未知', '可用', '不可用'];
+
+/**
+ * 车辆不可用原因文案。对应协议 Availability.UnavailableReason。
+ */
+export const UNAVAILABLE_REASON_LABELS: string[] = [
+  '未知', '无网络连接', '省电模式', '车辆使用中',
+  'OTA 安装进行中', '盗抢车辆追踪进行中', '服务模式已启用'
+];
+
+/**
+ * 车辆使用模式文案。对应协议 Availability.UsageMode。
+ */
+export const USAGE_MODE_LABELS: string[] = [
+  '未知', '已废弃', '未激活', '便利模式', '已激活', '行驶中', '发动机运行中', '发动机已熄火'
+];
+
+/**
+ * 远程启动状态文案。对应协议 EngineRemoteStart.RunningStatus。
+ */
+export const ENGINE_REMOTE_START_LABELS: string[] = ['未知', '已关闭', '启动中', '运行中', '停止中'];

@@ -21,6 +21,8 @@ import { PlaceResolver } from '../core/vehicle/PlaceResolver';
 import { ParkedPlaceInfo } from '../core/vehicle/ParkedPlaceInfo';
 import { ParkedPlaceStore } from '../core/vehicle/ParkedPlaceStore';
 import { CardPublisher } from '../core/vehicle/CardPublisher';
+import { VehicleVisual } from '../core/vehicle/VehicleVisual';
+import { VehicleVisualStore } from '../core/vehicle/VehicleVisualStore';
 import { BiometricGuard, BiometricResult } from '../core/vehicle/BiometricGuard';
 import { SessionStore } from '../core/session/SessionStore';
 import { StateDomain } from '../core/vehicle/VehicleStateStream';
@@ -331,6 +333,21 @@ struct Index {
   @State vin: string = '';
   @State modelName: string = '极星2';
   @State contentCodes: string = '';
+  /**
+   * 视觉信息所属的车辆 VIN。
+   *
+   * 用来判断是否换了车 —— 换了车就不能沿用上一辆车的视觉信息。
+   * 不是 @State，它只在状态更新时参与判断，不参与渲染。
+   */
+  private visualVin: string = '';
+  /** 车型年款，如「2024」。 */
+  @State modelYear: string = '';
+  /** 车身颜色中文名，如「月光银」。 */
+  @State paintName: string = '';
+  /** 轮毂尺寸（英寸），0 表示未识别。 */
+  @State wheelInch: number = 0;
+  /** 是否高性能套件。 */
+  @State performancePack: boolean = false;
 
   /** 四个状态开关的阶段。 */
   @State lockPhase: TogglePhase = TogglePhase.OFF;
@@ -672,6 +689,9 @@ struct Index {
     this.requestLocationPermission();
     // 露营模式状态从本地持久化恢复，不依赖网络
     this.initCampMode();
+    // 车辆视觉信息（车身颜色 / 年款 / 轮毂尺寸）同样是静态配置，
+    // 从本地缓存直接恢复，冷启动首帧就能显示，不用等网络回来再跳变。
+    this.restoreVisualCache();
     // 先读完刷新时刻再拉数据，保证「距上次刷新」的判断用的是真实值
     this.startup();
   }
@@ -1617,6 +1637,10 @@ struct Index {
     copy.vin = state.vin;
     copy.modelName = state.modelName;
     copy.contentCodes = state.contentCodes;
+    copy.modelYear = state.modelYear;
+    copy.paintName = state.paintName;
+    copy.wheelInch = state.wheelInch;
+    copy.performancePack = state.performancePack;
     copy.batteryCapacityKwh = state.batteryCapacityKwh;
     copy.battery = state.battery;
     copy.range = state.range;
@@ -2165,7 +2189,24 @@ struct Index {
     if (state.modelName.length > 0) {
       this.modelName = state.modelName;
     }
-    this.contentCodes = state.contentCodes;
+    // 视觉信息（车身颜色 / 年款 / 轮毂尺寸）只跟着 contentCodes 走。
+    // 配置码没变就保持现状，避免流式回调把已显示的内容刷掉；
+    // 配置码变了（或换了车）才更新，并顺手落盘，供下次冷启动直接复用。
+    const vinChanged = this.visualVin.length > 0 && state.vin !== this.visualVin;
+    if (vinChanged) {
+      // 换车了 —— 先把上一辆车的视觉信息清掉，别让新旧混在一起显示。
+      this.paintName = '';
+      this.wheelInch = 0;
+      this.performancePack = false;
+      this.modelYear = '';
+    }
+    if (state.contentCodes.length > 0 &&
+      (state.contentCodes !== this.contentCodes || vinChanged)) {
+      this.contentCodes = state.contentCodes;
+      this.visualVin = state.vin;
+      this.applyVisual(state.contentCodes);
+      this.saveVisualCache(state.vin, state.contentCodes);
+    }
 
     this.battery = state.battery ?? -1;
     this.batteryLevel = state.battery ?? -1;
@@ -2481,6 +2522,109 @@ struct Index {
       return `${this.batteryCapacityKwh.toFixed(0)} kWh`;
     }
     return '极星2';
+  }
+
+  // ---------- 车辆视觉信息（车身颜色 / 年款 / 轮胎尺寸） ----------
+
+  /**
+   * 从配置码解析并写入视觉信息字段。
+   *
+   * @param codes 配置码串（contentCodes）
+   */
+  private applyVisual(codes: string): void {
+    const visual = VehicleVisual.parse(codes);
+    this.paintName = visual.paintName;
+    this.wheelInch = visual.wheelInch;
+    this.performancePack = visual.performancePack;
+    if (visual.modelYear.length > 0) {
+      this.modelYear = visual.modelYear;
+    }
+  }
+
+  /**
+   * 从本地缓存恢复车辆视觉信息。
+   *
+   * 冷启动时车辆网络信息还没回来，不恢复的话副行会先显示兜底文案，
+   * 网络回来后才跳成「月光银 · 2024 款 · 20 寸轮毂」，看着像闪了一下。
+   *
+   * 缓存按 VIN 存；网络回来后若发现是另一辆车，applyState 会把它替换掉。
+   */
+  private restoreVisualCache(): void {
+    const context = this.context;
+    if (context === undefined) {
+      return;
+    }
+    const cache = VehicleVisualStore.loadSync(context);
+    if (cache.codes.length === 0) {
+      return;
+    }
+    this.contentCodes = cache.codes;
+    this.visualVin = cache.vin;
+    this.applyVisual(cache.codes);
+  }
+
+  /**
+   * 落盘车辆视觉信息，供下次冷启动复用。
+   *
+   * @param vin   车辆 VIN
+   * @param codes 配置码串
+   */
+  private saveVisualCache(vin: string, codes: string): void {
+    const context = this.context;
+    if (context === undefined) {
+      return;
+    }
+    VehicleVisualStore.save(context, vin, codes).catch((err: Error) => {
+      Log.warn(TAG, `保存车辆视觉信息失败: ${err.message}`);
+    });
+  }
+
+  /**
+   * 车身颜色文案。未识别时返回空串。
+   */
+  private paintText(): string {
+    return this.paintName;
+  }
+
+  /**
+   * 轮毂尺寸文案。未识别时返回空串。
+   */
+  private wheelText(): string {
+    if (this.wheelInch <= 0) {
+      return '';
+    }
+    return this.performancePack
+      ? `${this.wheelInch} 寸 · 高性能套件`
+      : `${this.wheelInch} 寸轮毂`;
+  }
+
+  /**
+   * 车辆视觉信息的分段文案。
+   *
+   * 每一项都可能读不到（协议里 contentCodes 可能缺失），
+   * 因此逐项判断，空的项直接跳过。
+   */
+  private visualSegments(): string[] {
+    const segments: string[] = [];
+    if (this.paintText().length > 0) {
+      segments.push(this.paintText());
+    }
+    if (this.modelYear.length > 0) {
+      segments.push(`${this.modelYear} 款`);
+    }
+    if (this.wheelText().length > 0) {
+      segments.push(this.wheelText());
+    }
+    return segments;
+  }
+
+  /**
+   * 车辆视觉信息的单行文案。
+   *
+   * 三项都没读到时返回空串 —— 此时保留原来的副标题。
+   */
+  private visualText(): string {
+    return this.visualSegments().join(' · ');
   }
 
   // ---------- 车模下方状态卡片 ----------
@@ -2956,6 +3100,13 @@ struct Index {
         name: this.parkedPlace !== undefined ? this.parkedPlace.fullName() : ''
       }
     });
+  }
+
+  /**
+   * 打开「车辆能力」页 —— 查看这台车到底支持哪些功能。
+   */
+  private openCapability(): void {
+    this.getUIContext().getRouter().pushUrl({ url: 'pages/Capability' });
   }
 
   /**
@@ -5076,9 +5227,13 @@ struct Index {
                     .fontSize(16)
                     .fontWeight(FontWeight.Medium)
                     .fontColor($r('app.color.app_primary_text'))
-                  Text(this.modelSubtitle())
+                  // 副行优先显示车辆视觉信息（车身颜色 · 年款 · 轮胎尺寸）——
+                  // 读不到时才退回配置码 / 电池容量。
+                  Text(this.visualText().length > 0 ? this.visualText() : this.modelSubtitle())
                     .fontSize(10)
                     .fontColor($r('app.color.app_tertiary_text'))
+                    .maxLines(1)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis })
                 }
                 .width('100%')
                 .alignItems(HorizontalAlign.Center)
@@ -5278,7 +5433,10 @@ struct Index {
           lowVoltageBatteryWarning: this.lowVoltageBatteryWarning,
           tyreWarnings: this.tyreWarnings,
           lightFaultCount: this.lightFaultCount,
-          lightFaultNames: this.lightFaultNames
+          lightFaultNames: this.lightFaultNames,
+          onCapabilityTap: () => {
+            this.openCapability();
+          }
         })
           .width('100%')
           .height('100%')
