@@ -1,7 +1,6 @@
 import { AppIconName } from './Icons';
 import { DurationSlider } from './DurationSlider';
 import { SwitchRow } from './SwitchRow';
-import { TemperaturePicker } from './TemperaturePicker';
 import { TogglePhase } from './StateToggle';
 
 /**
@@ -28,15 +27,11 @@ export struct CampModeCard {
   @Prop remainingMinutes: number = 0;
   /** 剩余时间占全程的比例（0 ~ 1），用于进度条。 */
   @Prop remainingRatio: number = 0;
-  /** 空调目标温度（摄氏度）。 */
-  @Prop celsius: number = 22;
 
   /** 点击开关。 */
   onToggle?: () => void;
   /** 调节运行时长。 */
   onDurationChange?: (minutes: number) => void;
-  /** 修改目标温度。 */
-  onTemperatureChange?: (celsius: number) => void;
 
   /**
    * 露营模式是否处于占用态（开启中或执行中）。
@@ -94,20 +89,6 @@ export struct CampModeCard {
         onTap: () => {
           if (this.onToggle !== undefined) {
             this.onToggle();
-          }
-        }
-      })
-
-      // ---------- 目标温度 ----------
-      // 放在开关与运行时长之间：开关是「开不开」，温度是「开到几度」，
-      // 时长是「开多久」—— 三者是同一件事的三个维度。
-      // 运行中置灰，与运行时长一致：改档位要重新下发空调指令。
-      TemperaturePicker({
-        celsius: this.celsius,
-        disabled: this.running(),
-        onChange: (celsius: number) => {
-          if (this.onTemperatureChange !== undefined) {
-            this.onTemperatureChange(celsius);
           }
         }
       })

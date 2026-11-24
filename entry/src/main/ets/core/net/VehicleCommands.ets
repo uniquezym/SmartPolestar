@@ -51,7 +51,13 @@ export class VehicleCommands {
   static readonly ACTION_WINDOWS_OPEN: string = 'windows-open';
   static readonly ACTION_WINDOWS_CLOSE: string = 'windows-close';
 
-  /** 空调启动的目标温度（默认值，与 Android 端一致）。 */
+  /**
+   * 空调启动时写入的目标温度。
+   *
+   * 协议里有这个字段（field 3），官方 App 也照写。
+   * 但本车能力探测显示不支持驻车空调温度设置，车端会忽略这个值，
+   * 实际温度由车端自己决定（22℃）。
+   */
   static readonly CLIMATE_TARGET_TEMPERATURE: number = 22.0;
 
   /**
@@ -61,11 +67,9 @@ export class VehicleCommands {
    * @param vin       车辆 VIN
    * @param action    动作标识
    * @param timeoutMs 超时
-   * @param targetTemperatureCelsius 空调目标温度（摄氏度），仅 climate-start 使用
    */
   static async execute(client: GrpcClient, vin: string, action: string,
-    timeoutMs: number = GrpcClient.DEFAULT_TIMEOUT_MS,
-    targetTemperatureCelsius: number = VehicleCommands.CLIMATE_TARGET_TEMPERATURE): Promise<void> {
+    timeoutMs: number = GrpcClient.DEFAULT_TIMEOUT_MS): Promise<void> {
     const writer = new ProtoWriter();
     // field 1 = 嵌套消息，其内部 field 1 = VIN
     // 还原自 Android 端 m1364c(1, m1389s0(vin, 1))：外层 field 1 是一段
@@ -154,8 +158,11 @@ export class VehicleCommands {
         // C3ClimateController 的 clivoid.invoke() 把
         // setCompartmentTemperatureCelsius(温度) 写进 ClimatizationStartRequest，
         // 默认值同样是 22.0f。
+        //
+        // 本车不支持驻车空调温度设置，这个值会被车端忽略 ——
+        // 但仍按官方格式写入，保持协议完整。
         writer.writeVarintField(2, 1);
-        writer.writeFixed32Field(3, targetTemperatureCelsius);
+        writer.writeFixed32Field(3, VehicleCommands.CLIMATE_TARGET_TEMPERATURE);
         rpcMethod = 'ClimatizationStart';
         break;
 

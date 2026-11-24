@@ -35,10 +35,8 @@ export class ControlCoordinator {
    * @param vin        车辆 VIN
    * @param action     动作标识
    * @param onResult   结果回调（true 表示成功）
-   * @param targetTemperatureCelsius 空调目标温度（摄氏度），仅 climate-start 使用
    */
-  async execute(vin: string, action: string, onResult: (success: boolean, message: string) => void,
-    targetTemperatureCelsius: number = VehicleCommands.CLIMATE_TARGET_TEMPERATURE): Promise<void> {
+  async execute(vin: string, action: string, onResult: (success: boolean, message: string) => void): Promise<void> {
     const label = VehicleCommands.label(action);
 
     try {
@@ -52,8 +50,7 @@ export class ControlCoordinator {
 
     // 2. 下发指令
     try {
-      await VehicleCommands.execute(this.client, vin, action,
-        GrpcClient.DEFAULT_TIMEOUT_MS, targetTemperatureCelsius);
+      await VehicleCommands.execute(this.client, vin, action, GrpcClient.DEFAULT_TIMEOUT_MS);
       Log.info(TAG, `车控指令已执行: ${label} VIN…${vin.substring(vin.length - 6)}`);
       onResult(true, `${label}指令已发送`);
     } catch (err) {

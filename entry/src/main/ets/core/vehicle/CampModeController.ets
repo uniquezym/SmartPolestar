@@ -24,8 +24,6 @@ export class CampModeController {
   static readonly KEY_DURATION: string = 'duration';
   /** 持久化键：到期时刻（epoch millis）。 */
   static readonly KEY_ENDS_AT: string = 'ends_at';
-  /** 持久化键：空调目标温度（摄氏度）。 */
-  static readonly KEY_TEMPERATURE: string = 'temperature';
 
   /** 档位数量：30 分钟 ~ 8 小时，步进 30 分钟。 */
   static readonly LEVEL_COUNT: number = 16;
@@ -37,10 +35,6 @@ export class CampModeController {
   static readonly STEP_MINUTES: number = 30;
   /** 默认时长（分钟）。 */
   static readonly DEFAULT_MINUTES: number = 60;
-  /** 可选的空调目标温度档位（摄氏度）。 */
-  static readonly TEMPERATURE_LEVELS: number[] = [20, 22, 24];
-  /** 默认目标温度（摄氏度）。 */
-  static readonly DEFAULT_TEMPERATURE: number = 22;
 
   /** 剩余时间心跳周期（毫秒）。 */
   static readonly TICK_INTERVAL_MS: number = 30000;
@@ -50,7 +44,6 @@ export class CampModeController {
   private context: common.UIAbilityContext | undefined = undefined;
   private endsAt: number = 0;
   private durationMinutes: number = CampModeController.DEFAULT_MINUTES;
-  private temperatureCelsius: number = CampModeController.DEFAULT_TEMPERATURE;
   private expireTimer: number = -1;
   private tickTimer: number = -1;
   private onExpire: (() => void) | undefined = undefined;
@@ -83,10 +76,7 @@ export class CampModeController {
       const duration = await store.get(CampModeController.KEY_DURATION,
         CampModeController.DEFAULT_MINUTES) as number;
       const endsAt = await store.get(CampModeController.KEY_ENDS_AT, 0) as number;
-      const temperature = await store.get(CampModeController.KEY_TEMPERATURE,
-        CampModeController.DEFAULT_TEMPERATURE) as number;
       this.durationMinutes = CampModeController.clampMinutes(duration);
-      this.temperatureCelsius = CampModeController.clampTemperature(temperature);
       this.endsAt = endsAt > Date.now() ? endsAt : 0;
       if (this.endsAt === 0) {
         await store.delete(CampModeController.KEY_ENDS_AT);
@@ -96,42 +86,6 @@ export class CampModeController {
     } catch (err) {
       Log.warn(TAG, `读取露营模式配置失败: ${(err as Error).message}`);
       return this.durationMinutes;
-    }
-  }
-
-  /**
-   * 把温度收敛到合法档位。
-   */
-  static clampTemperature(celsius: number): number {
-    for (const level of CampModeController.TEMPERATURE_LEVELS) {
-      if (level === celsius) {
-        return celsius;
-      }
-    }
-    return CampModeController.DEFAULT_TEMPERATURE;
-  }
-
-  /**
-   * 当前目标温度（摄氏度）。
-   */
-  get temperature(): number {
-    return this.temperatureCelsius;
-  }
-
-  /**
-   * 保存目标温度档位。
-   */
-  async saveTemperature(celsius: number): Promise<void> {
-    this.temperatureCelsius = CampModeController.clampTemperature(celsius);
-    if (this.context === undefined) {
-      return;
-    }
-    try {
-      const store = await CampModeController.open(this.context);
-      await store.put(CampModeController.KEY_TEMPERATURE, this.temperatureCelsius);
-      await store.flush();
-    } catch (err) {
-      Log.warn(TAG, `保存露营模式温度失败: ${(err as Error).message}`);
     }
   }
 

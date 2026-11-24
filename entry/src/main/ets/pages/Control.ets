@@ -24,8 +24,6 @@ export struct Control {
   @Prop campRemainingMinutes: number = 0;
   /** 剩余时间占全程的比例（0 ~ 1），用于进度条。 */
   @Prop campRemainingRatio: number = 0;
-  /** 露营模式目标温度（摄氏度）。 */
-  @Prop campCelsius: number = 22;
 
   /** 空气净化阶段。 */
   @Prop airPhase: TogglePhase = TogglePhase.OFF;
@@ -75,8 +73,6 @@ export struct Control {
   onCampToggle?: () => void;
   /** 调节运行时长。 */
   onCampDurationChange?: (minutes: number) => void;
-  /** 修改露营模式目标温度。 */
-  onCampTemperatureChange?: (celsius: number) => void;
   /** 点击空气净化开关。 */
   onAirToggle?: () => void;
   /** 修改充电上限。 */
@@ -149,7 +145,6 @@ export struct Control {
           durationMinutes: this.campDurationMinutes,
           remainingMinutes: this.campRemainingMinutes,
           remainingRatio: this.campRemainingRatio,
-          celsius: this.campCelsius,
           onToggle: () => {
             if (this.onCampToggle !== undefined) {
               this.onCampToggle();
@@ -158,11 +153,6 @@ export struct Control {
           onDurationChange: (minutes: number) => {
             if (this.onCampDurationChange !== undefined) {
               this.onCampDurationChange(minutes);
-            }
-          },
-          onTemperatureChange: (celsius: number) => {
-            if (this.onCampTemperatureChange !== undefined) {
-              this.onCampTemperatureChange(celsius);
             }
           }
         })

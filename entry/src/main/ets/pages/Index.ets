@@ -367,8 +367,6 @@ struct Index {
   @State campRemainingMinutes: number = 0;
   /** 露营模式剩余时间占全程的比例（0 ~ 1）。 */
   @State campRemainingRatio: number = 0;
-  /** 露营模式目标温度（摄氏度）。 */
-  @State campCelsius: number = 22;
   /** AQI 指数，-1 表示未知。控制页空气净化卡片用。 */
   @State airQualityIndex: number = -1;
   /** PM2.5 浓度（μg/m³），-1 表示未知。控制页空气净化卡片用。 */
@@ -3160,7 +3158,6 @@ struct Index {
     this.campController = controller;
     const duration = await controller.attach(ctx);
     this.campDurationMinutes = duration;
-    this.campCelsius = controller.temperature;
     if (controller.isActive()) {
       this.campPhase = TogglePhase.ON;
       controller.resume();
@@ -3471,7 +3468,7 @@ struct Index {
     }
     this.campRestarting = true;
     try {
-      const success = await this.executeAction(VehicleCommands.ACTION_CLIMATE_START, true, this.campCelsius);
+      const success = await this.executeAction(VehicleCommands.ACTION_CLIMATE_START, true);
       if (!success) {
         this.campRestartFailCount++;
         if (this.campRestartFailCount >= Index.CAMP_CLIMATE_MAX_RESTARTS) {
@@ -3529,11 +3526,9 @@ struct Index {
    *
    * @param action 动作标识
    * @param silent 为 true 时失败不弹提示（自动续开等后台动作不该打扰用户）
-   * @param targetTemperatureCelsius 空调目标温度（摄氏度），仅 climate-start 使用
    * @returns 是否下发成功
    */
-  private async executeAction(action: string, silent: boolean = false,
-    targetTemperatureCelsius: number = VehicleCommands.CLIMATE_TARGET_TEMPERATURE): Promise<boolean> {
+  private async executeAction(action: string, silent: boolean = false): Promise<boolean> {
     const ctx = this.context;
     const client = this.repository?.getClient();
     const session = this.repository?.getSession();
@@ -3554,7 +3549,7 @@ struct Index {
           return;
         }
         resolve(true);
-      }, targetTemperatureCelsius);
+      });
     });
   }
 
@@ -3633,9 +3628,7 @@ struct Index {
     }
 
     this.campPhase = TogglePhase.PENDING;
-    // 目标温度随指令一起下发 —— 车端在启动时就把设定温度定死，
-    // 运行中再改需要停机重启，没必要。
-    const success = await this.executeAction(VehicleCommands.ACTION_CLIMATE_START, false, this.campCelsius);
+    const success = await this.executeAction(VehicleCommands.ACTION_CLIMATE_START, false);
     if (!success) {
       this.campPhase = TogglePhase.OFF;
       return;
@@ -3729,22 +3722,6 @@ struct Index {
       return;
     }
     await controller.saveDuration(minutes);
-  }
-
-  /**
-   * 修改露营模式目标温度。
-   *
-   * 未运行时只改档位并持久化；运行中按钮已置灰，不会走到这里。
-   * 温度只在**下次启动空调时**生效 —— 车端的设定温度是启动参数，
-   * 没有单独改温的接口。
-   */
-  private async changeCampTemperature(celsius: number): Promise<void> {
-    this.campCelsius = celsius;
-    const controller = this.campController;
-    if (controller === undefined) {
-      return;
-    }
-    await controller.saveTemperature(celsius);
   }
 
   // ---------- 充电配置 ----------
@@ -5349,7 +5326,6 @@ struct Index {
           campDurationMinutes: this.campDurationMinutes,
           campRemainingMinutes: this.campRemainingMinutes,
           campRemainingRatio: this.campRemainingRatio,
-          campCelsius: this.campCelsius,
           airPhase: this.airPhase,
           airAqi: this.airQualityIndex,
           airPm25: this.pm25UgM3,
@@ -5360,9 +5336,6 @@ struct Index {
           },
           onCampDurationChange: (minutes: number) => {
             this.changeCampDuration(minutes);
-          },
-          onCampTemperatureChange: (celsius: number) => {
-            this.changeCampTemperature(celsius);
           },
           onAirToggle: () => {
             this.toggle(ToggleKind.PURIFIER);
@@ -5531,15 +5504,11 @@ struct Index {
             durationMinutes: this.campDurationMinutes,
             remainingMinutes: this.campRemainingMinutes,
             remainingRatio: this.campRemainingRatio,
-            celsius: this.campCelsius,
             onToggle: () => {
               this.toggleCamp();
             },
             onDurationChange: (minutes: number) => {
               this.changeCampDuration(minutes);
-            },
-            onTemperatureChange: (celsius: number) => {
-              this.changeCampTemperature(celsius);
             }
           })
         } else if (this.statusSheetKind === StatusKind.AIR) {
