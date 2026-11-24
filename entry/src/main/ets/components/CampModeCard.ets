@@ -9,7 +9,7 @@ import { TogglePhase } from './StateToggle';
  * 对应设计稿 `design/polestar-volvo-ux/index.html` 的第一张 `.ctrl`：
  *   卡片头（露营模式 / 驻车空调定时守护）
  *   → 露营模式开关行（未开启 / 已开启）
- *   → 运行时长滑块（30 分钟 ~ 8 小时，16 档）
+ *   → 运行时长滑块（1 小时 ~ 8 小时，15 档）
  *   → 剩余时间（倒计时 + 4px 进度条）
  *
  * 卡片自身是一个组件而不是父组件里的 @Builder 插槽：

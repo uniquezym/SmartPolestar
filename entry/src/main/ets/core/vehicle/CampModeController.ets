@@ -25,10 +25,10 @@ export class CampModeController {
   /** 持久化键：到期时刻（epoch millis）。 */
   static readonly KEY_ENDS_AT: string = 'ends_at';
 
-  /** 档位数量：30 分钟 ~ 8 小时，步进 30 分钟。 */
-  static readonly LEVEL_COUNT: number = 16;
+  /** 档位数量：1 小时 ~ 8 小时，步进 30 分钟。 */
+  static readonly LEVEL_COUNT: number = 15;
   /** 最小时长（分钟）。 */
-  static readonly MIN_MINUTES: number = 30;
+  static readonly MIN_MINUTES: number = 60;
   /** 最大时长（分钟）。 */
   static readonly MAX_MINUTES: number = 480;
   /** 步进（分钟）。 */

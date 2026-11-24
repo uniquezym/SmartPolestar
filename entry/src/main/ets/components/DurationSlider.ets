@@ -7,11 +7,11 @@ import { AppIcon, AppIconName } from './Icons';
  *   一行「时钟图标 + 运行时长 + 数值」
  *   下方是滑杆与四个刻度标签
  *
- * 档位共 16 档（30 分钟 ~ 8 小时，步进 30 分钟）：
- *   索引 0 → 30 分，索引 1 → 1 小时（默认），索引 15 → 8 小时。
+ * 档位共 15 档（1 小时 ~ 8 小时，步进 30 分钟）：
+ *   索引 0 → 1 小时（默认），索引 14 → 8 小时。
  *
- * 刻度标签按档位百分比绝对定位（0% / 20% / 46.67% / 100%），
- * 不能用等分 —— 16 档并非线性均分到 4 个标签上。
+ * 刻度标签按档位百分比绝对定位（0% / 14.29% / 42.86% / 100%），
+ * 不能用等分 —— 15 档并非线性均分到 4 个标签上。
  */
 @Component
 export struct DurationSlider {
@@ -22,8 +22,8 @@ export struct DurationSlider {
   /** 时长变化回调。 */
   onChange?: (minutes: number) => void;
 
-  /** 滑杆索引（0 ~ 15）。 */
-  @State private index: number = 1;
+  /** 滑杆索引（0 ~ 14）。 */
+  @State private index: number = 0;
   /** 刻度容器宽度，用于按百分比定位标签。 */
   @State private trackWidth: number = 0;
 
@@ -43,14 +43,16 @@ export struct DurationSlider {
 
   /**
    * 分钟数 → 档位索引。
+   *
+   * 最短 60 分钟（索引 0），步进 30 分钟，最长 480 分钟（索引 14）。
    */
   static minutesToIndex(minutes: number): number {
-    const index = Math.round(minutes / 30) - 1;
+    const index = Math.round((minutes - 60) / 30);
     if (index < 0) {
       return 0;
     }
-    if (index > 15) {
-      return 15;
+    if (index > 14) {
+      return 14;
     }
     return index;
   }
@@ -59,7 +61,7 @@ export struct DurationSlider {
    * 档位索引 → 分钟数。
    */
   static indexToMinutes(index: number): number {
-    return (index + 1) * 30;
+    return 60 + index * 30;
   }
 
   /**
@@ -81,13 +83,13 @@ export struct DurationSlider {
    */
   private tick(index: number): string {
     if (index === 0) {
-      return '30分';
+      return '1小时';
     }
-    if (index === 3) {
-      return '2小时';
+    if (index === 4) {
+      return '3小时';
     }
-    if (index === 7) {
-      return '4小时';
+    if (index === 8) {
+      return '5小时';
     }
     return '8小时';
   }
@@ -99,7 +101,7 @@ export struct DurationSlider {
    * 刻度才能与滑块真实位置对齐。标签宽 40 且居中，再减去半个标签宽。
    */
   private tickOffset(index: number): number {
-    const ratio = index / 15;
+    const ratio = index / 14;
     return 9 + (this.trackWidth - 18) * ratio - 20;
   }
 
@@ -134,7 +136,7 @@ export struct DurationSlider {
       Slider({
         value: $$this.index,
         min: 0,
-        max: 15,
+        max: 14,
         step: 1
       })
         .width('100%')
@@ -153,7 +155,7 @@ export struct DurationSlider {
 
       // 刻度标签：按档位百分比定位
       Stack({ alignContent: Alignment.TopStart }) {
-        ForEach([0, 3, 7, 15], (index: number) => {
+        ForEach([0, 4, 8, 14], (index: number) => {
           Text(this.tick(index))
             .width(40)
             .textAlign(TextAlign.Center)
