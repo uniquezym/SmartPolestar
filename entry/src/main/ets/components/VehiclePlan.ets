@@ -200,22 +200,37 @@ export struct VehiclePlan {
   }
 
   /**
-   * 机盖标记点：用极星 logo 取代原来的「盖」字圆点。
+   * 机盖标记点：闭合时是极星 logo，开启时换成前盖开启图标。
    *
    * 车头是整车的品牌位置，圆形标记点在这里只是一枚无意义的文字标签；
    * 换成 logo 后既说得清「这是机盖」，也把品牌标识放到了最显眼的位置。
-   * 机盖开启时 logo 转警示色 —— 与其他部件的开启态保持同一套语言。
+   * 机盖开启时换成 HOOD_OPEN 图标 —— 与尾门开启的 TRUNK_OPEN 同一套
+   * 「物理开口用琥珀 + 掀开图标」语言。
    */
   @Builder
   hoodMarker() {
-    Image(this.hoodOpen ? $r('app.media.polestar_logo_warn') : $r('app.media.polestar_logo'))
-      .width(15)
-      .height(15)
-      .objectFit(ImageFit.Contain)
-      .position({
-        x: 100 - 7.5,
-        y: 22 - 7.5
+    if (this.hoodOpen) {
+      AppIcon({
+        name: AppIconName.HOOD_OPEN,
+        iconSize: 17,
+        color: $r('app.color.app_warn')
       })
+      .width(17)
+      .height(17)
+      .position({
+        x: 100 - 8.5,
+        y: 22 - 8.5
+      })
+    } else {
+      Image($r('app.media.polestar_logo'))
+        .width(15)
+        .height(15)
+        .objectFit(ImageFit.Contain)
+        .position({
+          x: 100 - 7.5,
+          y: 22 - 7.5
+        })
+    }
   }
 
   /**
@@ -379,6 +394,20 @@ export struct VehiclePlan {
     Stack({ alignContent: Alignment.TopStart }) {
       // ---------- 车身线稿（Path 盒子为 px 尺寸，与路径坐标 1:1） ----------
       Stack({ alignContent: Alignment.TopStart }) {
+        // 前盖板：车头引擎盖区域 —— 车身顶弧与风挡上沿之间那块。
+        // 机盖开启时填琥珀色 + 琥珀描边，与尾门开启同一套语言 ——
+        // 这两处是「物理开口」，开着需要你下车处理；
+        // 车门车窗开启是日常，仍用品牌蓝。
+        // 路径直接复用车身轮廓的两段曲线（顶弧 C47 25 67 6 100 6 /
+        // C133 6 153 25 157 52）与风挡上沿（C129 45 71 45 64 58），
+        // 保证填充与车身、风挡严丝合缝。
+        Path({ commands: 'M43 52 C47 25 67 6 100 6 C133 6 153 25 157 52 L136 58 C129 45 71 45 64 58 Z' })
+          .fill(this.hoodOpen ? $r('app.color.app_warn_soft') : Color.Transparent)
+          .stroke(this.hoodOpen ? $r('app.color.app_warn') : Color.Transparent)
+          .strokeWidth(this.sw(1.4))
+          .width(`${this.viewW}px`)
+          .height(`${this.viewH}px`)
+
         // 尾门板：车身尾部的半圆区域（y=254 分割线以下、到车尾弧线）。
         // 填充色表达尾门状态，分三档：
         //   已打开 —— 琥珀警示（app_warn_soft 填充 + app_warn 描边），
