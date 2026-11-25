@@ -78,8 +78,10 @@ export struct VehiclePlan {
    * 高亮色按充电阶段配对，各阶段不共用同一个色。
    */
   @Prop chargeFillColor: ResourceColor = $r('app.color.app_charge_fill_accent');
-  /** 尾门解锁 —— 尾门标记点显示警示色。 */
+  /** 尾门解锁（闭合但未上锁）—— 尾门板显示琥珀警示色。 */
   @Prop trunkUnlocked: boolean = false;
+  /** 尾门已打开 —— 尾门板显示品牌蓝。 */
+  @Prop trunkOpen: boolean = false;
   /** 尾门指令执行中 —— 标记点显示蓝色描边与旋转指示器。 */
   @Prop trunkBusy: boolean = false;
   /**
@@ -297,6 +299,36 @@ export struct VehiclePlan {
   }
 
   /**
+   * 尾门板填充色。
+   *
+   * 已打开 → 品牌蓝浅底；未锁（闭合）→ 琥珀浅底；已锁 → 透明。
+   * 打开态优先于未锁态 —— 尾门打开时车端会连带解锁，两者同时成立。
+   */
+  private trunkFillColor(): ResourceColor {
+    if (this.trunkOpen) {
+      return $r('app.color.app_accent_soft');
+    }
+    if (this.trunkUnlocked) {
+      return $r('app.color.app_warn_soft');
+    }
+    return Color.Transparent;
+  }
+
+  /**
+   * 尾门板描边色。与填充色同一套分档，透明态必须显式给 Transparent ——
+   * Path 默认描边是黑色，封闭路径顶部会多出一道黑边。
+   */
+  private trunkStrokeColor(): ResourceColor {
+    if (this.trunkOpen) {
+      return $r('app.color.app_accent');
+    }
+    if (this.trunkUnlocked) {
+      return $r('app.color.app_state_unlocked');
+    }
+    return Color.Transparent;
+  }
+
+  /**
    * 判断某个部件是否处于开启态。
    *
    * 协议中 1 与 3 都表示「未关闭」，与原版 g10 的判定一致。
@@ -342,15 +374,21 @@ export struct VehiclePlan {
       // ---------- 车身线稿（Path 盒子为 px 尺寸，与路径坐标 1:1） ----------
       Stack({ alignContent: Alignment.TopStart }) {
         // 尾门板：车身尾部的半圆区域（y=254 分割线以下、到车尾弧线）。
-        // 填充色表达尾门锁状态，与车门、车窗同一套语言 ——
-        // 开启态用品牌蓝（app_accent_soft 填充 + app_accent 描边）。
+        // 填充色表达尾门状态，分三档：
+        //   已打开 —— 品牌蓝（app_accent_soft 填充 + app_accent 描边），
+        //              与开启的车门、车窗同一套语言；
+        //   未锁（闭合）—— 琥珀警示（app_warn_soft 填充 + app_state_unlocked 描边），
+        //              与「未锁」这个安全提示语义一致；
+        //   已锁 —— 透明。
+        // 尾门打开时车端会连带把尾门锁置为未锁，两种状态会同时成立，
+        // 所以打开态优先于未锁态。
         // 画在车身轮廓之前 —— 否则填充会盖掉车身弧线的描边。
         // 上边界是已有的 M39 254h122 分隔线，底边与车身弧线重合。
-        // 未解锁时描边必须保持 Transparent：Path 默认描边是黑色，
+        // 非打开态描边必须保持 Transparent：Path 默认描边是黑色，
         // 不关掉的话封闭路径的顶部横线会多出一道黑边。
         Path({ commands: 'M39 254 L161 254 C161 294 142 328 100 328 C58 328 39 298 39 254 Z' })
-          .fill(this.trunkUnlocked ? $r('app.color.app_accent_soft') : Color.Transparent)
-          .stroke(this.trunkUnlocked ? $r('app.color.app_accent') : Color.Transparent)
+          .fill(this.trunkFillColor())
+          .stroke(this.trunkStrokeColor())
           .strokeWidth(this.sw(1.4))
           .width(`${this.viewW}px`)
           .height(`${this.viewH}px`)
@@ -556,7 +594,8 @@ export struct VehiclePlan {
 
       // 尾门状态指示：不再是「尾」字圆点（既是状态又是按钮，语义双重）。
       // 尾门板本身承担热区与状态，这里只叠加一个轻量指示：
-      //   已解锁 → 锁图标（提示「当前是解锁态，点一下会上锁」）
+      //   已解锁 → 锁图标（提示「当前是解锁态，点一下会上锁」），
+      //             图标颜色跟尾门板描边一致，保持同一套色彩语言；
       //   执行中 → 转圈（填充色保持原状态不变，只用动效表达进行中）
       Stack({ alignContent: Alignment.Center }) {
         if (this.trunkBusy) {
@@ -564,11 +603,13 @@ export struct VehiclePlan {
             .width(24)
             .height(24)
             .color($r('app.color.app_accent'))
-        } else if (this.trunkUnlocked) {
+        } else if (this.trunkUnlocked || this.trunkOpen) {
           AppIcon({
             name: AppIconName.LOCK_OPEN,
             iconSize: 13,
-            color: $r('app.color.app_accent')
+            color: this.trunkOpen
+              ? $r('app.color.app_accent')
+              : $r('app.color.app_state_unlocked')
           })
         }
       }

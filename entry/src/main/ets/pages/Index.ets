@@ -5144,6 +5144,7 @@ struct Index {
                 chargeFillColor: this.chargeMarkerFillColor(),
                 chargePulsing: this.chargeMarkerPulsing(),
                 trunkUnlocked: this.trunkUnlocked,
+                trunkOpen: this.trunkPhase === TogglePhase.ON,
                 trunkBusy: this.trunkBusy,
                 onTrunkTap: () => {
                   this.toggleTrunk();
