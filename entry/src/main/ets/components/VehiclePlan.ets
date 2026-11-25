@@ -594,22 +594,28 @@ export struct VehiclePlan {
 
       // 尾门状态指示：不再是「尾」字圆点（既是状态又是按钮，语义双重）。
       // 尾门板本身承担热区与状态，这里只叠加一个轻量指示：
-      //   已解锁 → 锁图标（提示「当前是解锁态，点一下会上锁」），
-      //             图标颜色跟尾门板描边一致，保持同一套色彩语言；
+      //   已打开 → 掀盖图标（图形本身表达「盖已翻开」）
+      //   已解锁 → 开锁图标（表达「现在是解锁态，点一下会上锁」）
       //   执行中 → 转圈（填充色保持原状态不变，只用动效表达进行中）
+      // 两个状态的图形不同，颜色也不同 —— 图形讲「发生了什么」，
+      // 颜色讲「是什么性质」，两者都不靠颜色单独承担。
       Stack({ alignContent: Alignment.Center }) {
         if (this.trunkBusy) {
           LoadingProgress()
             .width(24)
             .height(24)
             .color($r('app.color.app_accent'))
-        } else if (this.trunkUnlocked || this.trunkOpen) {
+        } else if (this.trunkOpen) {
+          AppIcon({
+            name: AppIconName.TRUNK_OPEN,
+            iconSize: 15,
+            color: $r('app.color.app_accent')
+          })
+        } else if (this.trunkUnlocked) {
           AppIcon({
             name: AppIconName.LOCK_OPEN,
             iconSize: 13,
-            color: this.trunkOpen
-              ? $r('app.color.app_accent')
-              : $r('app.color.app_state_unlocked')
+            color: $r('app.color.app_state_unlocked')
           })
         }
       }
